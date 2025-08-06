@@ -1,0 +1,5 @@
+name: DecaDB
+version: 1.0
+main: com.decacagle.DecaDB
+api-version: 1.21.5
+author: DecaCagle
