@@ -145,6 +145,105 @@ public class DataWorker {
 
     }
 
+    public String readChunkSafely(int xIndex, int zIndex, boolean readInfinitely, int direction) {
+        int startX = xIndex * 16;
+        int startZ = -1 + (zIndex * 16);
+
+        int x = startX;
+        int z = startZ;
+        int y = -64;
+
+        StringBuilder hexBuilder = new StringBuilder();
+        boolean reading = true;
+        int blocksRead = 0;
+        final int MAX_BLOCKS_PER_CHUNK = 16 * 16 * 384; // Reasonable limit
+
+        while (reading && blocksRead < MAX_BLOCKS_PER_CHUNK) {
+            Block current = world.getBlockAt(x, y, z);
+            char presentChar = getCorrespondingChar(current.getType());
+
+            if (presentChar != 'n') {
+                hexBuilder.append(presentChar);
+                blocksRead++;
+            } else {
+                // Found invalid Material, chunk is out of data, stop scanning
+                reading = false;
+                break;
+            }
+
+            // Move to next position
+            x++;
+            if (x >= (startX + 16)) {
+                if (z <= startZ - 15) {
+                    x = startX;
+                    z = startZ;
+                    y++;
+                } else {
+                    x = startX;
+                    z--;
+                }
+            }
+
+            if (y >= 320) {
+                if (readInfinitely) {
+                    xIndex += direction;
+                    startX = xIndex * 16;
+                    x = startX;
+                    z = startZ;
+                    y = -64;
+                    logger.info("Moving to next chunk: X=" + xIndex);
+                } else {
+                    logger.warning("Hit build height limit at Y=320. Blocks read: " + blocksRead);
+                    break;
+                }
+            }
+        }
+
+        if (blocksRead >= MAX_BLOCKS_PER_CHUNK) {
+            logger.severe("Possible data corruption detected! Read " + blocksRead + " blocks without finding end marker.");
+        }
+
+        // Convert hex to ASCII
+        StringBuilder asciiBuilder = new StringBuilder();
+        for (int i = 0; i < hexBuilder.length(); i += 2) {
+            if (i + 1 < hexBuilder.length()) {
+                String hexByte = new String(new char[]{hexBuilder.charAt(i), hexBuilder.charAt(i + 1)});
+                try {
+                    asciiBuilder.append(hexToAscii(hexByte));
+                } catch (Exception e) {
+                    logger.warning("Invalid hex sequence: " + hexByte);
+                    break;
+                }
+            }
+        }
+
+        return asciiBuilder.toString();
+    }
+
+    public void deleteChunkCompletely(int xIndex, int zIndex, boolean readInfinitely, int direction) {
+        int startX = xIndex * 16;
+        int startZ = -1 + (zIndex * 16);
+
+        // Clean every block in the chunk area
+        for (int x = startX; x < startX + 16; x++) {
+            for (int z = startZ; z > startZ - 16; z--) {
+                for (int y = -64; y < 320; y++) {
+                    Block current = world.getBlockAt(x, y, z);
+
+                    if (isWoolBlock(current.getType())) {
+                        if (y == -64) {
+                            current.setType(Material.GRASS_BLOCK);
+                        } else {
+                            current.setType(Material.AIR);
+                        }
+                    }
+                }
+            }
+        }
+
+        logger.info("Completely cleaned chunk at X:" + xIndex + ", Z:" + zIndex);
+    }
+    
     public void deleteChunk(int xIndex, int zIndex, boolean readInfinitely, int direction) {
 
         // Calculate starting scan coordinates based on given index

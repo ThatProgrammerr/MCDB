@@ -97,7 +97,7 @@ public class APIManager {
     int indexOffset = -1;
 
     public void addFileRoutes(HttpServer server) {
-        String startIndex = worker.readChunk(0, -1, false, 1);
+        String startIndex = worker.readChunkSafely(0, -1, false, 1);
 
         if (!startIndex.isEmpty() && !startIndex.equals("0")) {
             Set<String> processedTitles = new HashSet<>();
@@ -111,7 +111,7 @@ public class APIManager {
                 return;
             }
 
-            String currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+            String currentMetadata = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
 
             if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
                 logger.warning("Invalid file metadata at starting index: " + currentIndex);
@@ -144,7 +144,7 @@ public class APIManager {
                 }
 
                 currentIndex = nextIndex;
-                currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+                currentMetadata = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
 
                 if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
                     logger.warning("Invalid file metadata at index: " + currentIndex);
@@ -238,7 +238,7 @@ public class APIManager {
         Bukkit.getScheduler().runTask(plugin, () -> {
             logger.info("Starting file system integrity check...");
 
-            String startIndex = worker.readChunk(0, -1, false, 1);
+            String startIndex = worker.readChunkSafely(0, -1, false, 1);
             if (startIndex.isEmpty() || startIndex.equals("0")) {
                 logger.info("No files to validate.");
                 return;
@@ -255,7 +255,7 @@ public class APIManager {
                     break;
                 }
 
-                String metadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+                String metadata = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
                 if (!DataUtilities.isValidFileMetadata(metadata)) {
                     logger.severe("CORRUPTION: Invalid metadata at index " + currentIndex);
                     break;

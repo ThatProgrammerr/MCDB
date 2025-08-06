@@ -550,7 +550,7 @@ public class QueryHandler extends APIEndpoint {
         int x = Integer.parseInt(args[2]);
         int z = Integer.parseInt(args[3]);
 
-        String rawRead = worker.readChunk(x, z, false, 1);
+        String rawRead = worker.readChunkSafely(x, z, false, 1);
 
         respond(exchange, 200, "Result: " + rawRead);
     }
@@ -559,7 +559,7 @@ public class QueryHandler extends APIEndpoint {
         int x = Integer.parseInt(args[2]);
         int z = Integer.parseInt(args[3]);
 
-        worker.deleteChunk(x, z, false, 1);
+        worker.deleteChunkCompletely(x, z, false, 1);
 
         respond(exchange, 200, "Success!");
     }
@@ -569,7 +569,7 @@ public class QueryHandler extends APIEndpoint {
         int z = Integer.parseInt(args[3]);
         String body = query.substring(query.indexOf(args[3]) + args[3].length() + 1);
 
-        worker.deleteChunk(x, z, false, 1);
+        worker.deleteChunkCompletely(x, z, false, 1);
         worker.writeToChunk(body, x, z, false, 1);
 
         respond(exchange, 200, "Success!");

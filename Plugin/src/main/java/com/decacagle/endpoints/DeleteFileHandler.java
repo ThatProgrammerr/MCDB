@@ -76,7 +76,7 @@ public class DeleteFileHandler extends APIEndpoint {
         // This is important for large files that span multiple chunks
         for (int i = 2; i <= 5; i++) {  // Check a few extra chunks for large files
             try {
-                String testRead = worker.readChunk(i, -index + indexOffset, false, 1);
+                String testRead = worker.readChunkSafely(i, -index + indexOffset, false, 1);
                 if (!testRead.isEmpty() && !testRead.equals("Failed")) {
                     cleanChunkCompletely(i, -index + indexOffset);
                 } else {
@@ -93,7 +93,7 @@ public class DeleteFileHandler extends APIEndpoint {
      */
     private void cleanChunkCompletely(int x, int z) {
         // First delete using the worker's method
-        worker.deleteChunk(x, z, false, 1);
+        worker.deleteChunkCompletely(x, z, false, 1);
 
         // Then ensure any remaining blocks are cleaned manually
         int startX = x * 16;
@@ -123,7 +123,7 @@ public class DeleteFileHandler extends APIEndpoint {
             return false;
         }
 
-        String metadata = worker.readChunk(0, -index + indexOffset, false, 1);
+        String metadata = worker.readChunkSafely(0, -index + indexOffset, false, 1);
         return DataUtilities.isValidFileMetadata(metadata);
     }
 
@@ -140,7 +140,7 @@ public class DeleteFileHandler extends APIEndpoint {
             return;
         }
 
-        String metadata = worker.readChunk(0, -index + indexOffset, false, 1);
+        String metadata = worker.readChunkSafely(0, -index + indexOffset, false, 1);
         String targetTitle = DataUtilities.parseTitle(metadata);
         int lastIndex = DataUtilities.parseLastIndexTable(metadata);
         int nextIndex = DataUtilities.parseNextIndexTable(metadata);
@@ -179,7 +179,7 @@ public class DeleteFileHandler extends APIEndpoint {
     private void updateLinkedListForDeletion(int lastIndex, int nextIndex, int currentIndex) {
         // if target file has no last index, update start index to be target's next index
         if (lastIndex == 0) {
-            worker.deleteChunk(0, -1, false, 1);
+            worker.deleteChunkCompletely(0, -1, false, 1);
             if (nextIndex != 0) {
                 worker.writeToChunk("" + nextIndex, 0, -1, false, 1);
             } else {
@@ -187,7 +187,7 @@ public class DeleteFileHandler extends APIEndpoint {
             }
         } else {
             // otherwise, update nextIndex of target's last to be target's nextIndex
-            String lastMeta = worker.readChunk(0, -lastIndex + indexOffset, false, 1);
+            String lastMeta = worker.readChunkSafely(0, -lastIndex + indexOffset, false, 1);
 
             if (DataUtilities.isValidFileMetadata(lastMeta)) {
                 String lastTitle = DataUtilities.parseTitle(lastMeta);
@@ -198,14 +198,14 @@ public class DeleteFileHandler extends APIEndpoint {
 
                 logger.info("Updating metadata for previous file in the chain, setting nextIndex to " + nextIndex);
 
-                worker.deleteChunk(0, -lastIndex + indexOffset, false, 1);
+                worker.deleteChunkCompletely(0, -lastIndex + indexOffset, false, 1);
                 worker.writeToChunk(newMeta, 0, -lastIndex + indexOffset, false, 1);
             }
         }
 
         // if target file has a nextIndex, update nextIndex's last to be target's last
         if (nextIndex != 0) {
-            String nextMeta = worker.readChunk(0, -nextIndex + indexOffset, false, 1);
+            String nextMeta = worker.readChunkSafely(0, -nextIndex + indexOffset, false, 1);
 
             if (DataUtilities.isValidFileMetadata(nextMeta)) {
                 String nextTitle = DataUtilities.parseTitle(nextMeta);
@@ -216,7 +216,7 @@ public class DeleteFileHandler extends APIEndpoint {
 
                 String newMeta = DataUtilities.fileMetadataBuilder(nextTitle, nextMime, lastIndex, nextNext);
 
-                worker.deleteChunk(0, -nextIndex + indexOffset, false, 1);
+                worker.deleteChunkCompletely(0, -nextIndex + indexOffset, false, 1);
                 worker.writeToChunk(newMeta, 0, -nextIndex + indexOffset, false, 1);
             }
         }

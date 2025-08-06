@@ -118,14 +118,14 @@ public class UploadHandler extends APIEndpoint {
      * Checks if a file with the given title already exists
      */
     private boolean fileExists(String fileTitle) {
-        String startIndexText = worker.readChunk(0, -1, false, 1);
+        String startIndexText = worker.readChunkSafely(0, -1, false, 1);
 
         if (startIndexText.isEmpty() || startIndexText.equals("0")) {
             return false;
         }
 
         int currentIndex = Integer.parseInt(startIndexText);
-        String currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+        String currentMetadata = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
 
         if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
             return false;
@@ -140,7 +140,7 @@ public class UploadHandler extends APIEndpoint {
 
         while (nextIndex != 0) {
             currentIndex = nextIndex;
-            currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+            currentMetadata = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
 
             if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
                 break;
@@ -162,7 +162,7 @@ public class UploadHandler extends APIEndpoint {
      */
     private void cleanChunkCompletely(int x, int z) {
         // First delete normally
-        worker.deleteChunk(x, z, false, 1);
+        worker.deleteChunkCompletely(x, z, false, 1);
 
         // Then ensure any remaining blocks are cleaned
         int startX = x * 16;
@@ -204,19 +204,19 @@ public class UploadHandler extends APIEndpoint {
         }
 
         // No free chunks available, use existing sequential allocation logic
-        String startIndexText = worker.readChunk(0, -1, false, 1);
+        String startIndexText = worker.readChunkSafely(0, -1, false, 1);
 
         if (startIndexText.isEmpty() || startIndexText.equals("0")) {
             worker.writeToChunk("1", 0, -1, false, 1);
             return 1;
         } else {
             int currentIndex = Integer.parseInt(startIndexText);
-            String currentData = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+            String currentData = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
             int nextIndex = DataUtilities.parseNextIndexTable(currentData);
 
             while (nextIndex != 0) {
                 currentIndex = nextIndex;
-                currentData = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+                currentData = worker.readChunkSafely(0, -currentIndex + indexOffset, false, 1);
                 nextIndex = DataUtilities.parseNextIndexTable(currentData);
             }
 
@@ -240,14 +240,14 @@ public class UploadHandler extends APIEndpoint {
 
     public void updateLastMetadata(int index) {
         if (index != 1) {
-            String metadata = worker.readChunk(0, -(index - 1) + indexOffset, false, 1);
+            String metadata = worker.readChunkSafely(0, -(index - 1) + indexOffset, false, 1);
 
             if (DataUtilities.isValidFileMetadata(metadata)) {
                 String title = DataUtilities.parseTitle(metadata);
                 String mime = DataUtilities.parseFileMime(metadata);
                 int last = DataUtilities.parseLastIndexTable(metadata);
 
-                worker.deleteChunk(0, -(index - 1) + indexOffset, false, 1);
+                worker.deleteChunkCompletely(0, -(index - 1) + indexOffset, false, 1);
 
                 String newMetadata = DataUtilities.fileMetadataBuilder(title, mime, last, index);
 

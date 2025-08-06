@@ -38,13 +38,13 @@ public class FileReader extends APIEndpoint {
 
     public void readAndServeFile(HttpExchange exchange) {
 
-        String metadata = worker.readChunk(0, -fileIndex + indexOffset, false, 1);
+        String metadata = worker.readChunkSafely(0, -fileIndex + indexOffset, false, 1);
 
         String fileMime = DataUtilities.parseFileMime(metadata);
 
         logger.info("Serving " + DataUtilities.parseTitle(metadata) + " as " + fileMime + " from index " + fileIndex);
 
-        String base64Data = worker.readChunk(1, -fileIndex + indexOffset, true, 1);
+        String base64Data = worker.readChunkSafely(1, -fileIndex + indexOffset, true, 1);
 
         byte[] fileBytes = Base64.getDecoder().decode(base64Data);
 
