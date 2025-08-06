@@ -3,6 +3,7 @@ package com.decacagle.endpoints;
 import com.decacagle.DecaDB;
 import com.decacagle.data.DataUtilities;
 import com.decacagle.data.DataWorker;
+import com.decacagle.data.TableManager;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.bukkit.Material;
@@ -13,13 +14,14 @@ import java.util.logging.Logger;
 public class DeleteFileHandler extends APIEndpoint {
 
     private HttpServer server;
+    private TableManager tableManager;
     private int indexOffset = -1;
 
     public DeleteFileHandler(HttpServer server, Logger logger, World world, DecaDB plugin, DataWorker worker) {
         super(logger, world, plugin, worker);
 
         this.server = server;
-
+        this.tableManager = new TableManager(logger, world, worker);
     }
 
     public void handle(HttpExchange exchange) {
@@ -31,6 +33,13 @@ public class DeleteFileHandler extends APIEndpoint {
 
             runSynchronously(() -> deleteFile(server, exchange, index));
         }
+    }
+
+    /**
+     * Adds a deleted file chunk to the recycling system
+     */
+    private void addFileToFreeChunks(int fileIndex) {
+        tableManager.addToFreeChunks(fileIndex, "file", 0);
     }
 
     /**
@@ -77,7 +86,6 @@ public class DeleteFileHandler extends APIEndpoint {
 
             worker.deleteChunk(0, -lastIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, 0, -lastIndex + indexOffset, false, 1);
-
         }
 
         // if target file has a nextIndex, update nextIndex's last to be target's last
@@ -93,8 +101,8 @@ public class DeleteFileHandler extends APIEndpoint {
 
             worker.deleteChunk(0, -nextIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, 0, -nextIndex + indexOffset, false, 1);
-
         }
+
         // delete target's metadata
         worker.deleteChunk(0, -index + indexOffset, false, 1);
         // delete target's data
@@ -105,12 +113,13 @@ public class DeleteFileHandler extends APIEndpoint {
         // delete server context related to file
         server.removeContext(DataUtilities.contextNameBuilder(targetTitle));
 
-        respond(exchange, 200, "Deleted file with success: " + targetTitle);
+        // Add the deleted file chunk to free chunks for recycling
+        addFileToFreeChunks(index);
 
+        respond(exchange, 200, "Deleted file with success: " + targetTitle);
     }
 
     public void deleteSign(int fileIndex) {
         world.getBlockAt(-1, -63, -(fileIndex * 16) + (indexOffset * 16) - 1).setType(Material.AIR);
     }
-
 }

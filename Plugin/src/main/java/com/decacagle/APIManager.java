@@ -2,6 +2,7 @@ package com.decacagle;
 
 import com.decacagle.data.DataUtilities;
 import com.decacagle.data.DataWorker;
+import com.decacagle.data.TableManager;
 import com.decacagle.endpoints.*;
 import com.sun.net.httpserver.HttpServer;
 import org.bukkit.Bukkit;
@@ -17,12 +18,14 @@ public class APIManager {
     private World world;
     private DecaDB plugin;
     private DataWorker worker;
+    private TableManager tableManager;
 
     public APIManager(Logger logger, World world, DecaDB plugin) {
         this.logger = logger;
         this.world = world;
         this.plugin = plugin;
         this.worker = new DataWorker(logger, world, plugin);
+        this.tableManager = new TableManager(logger, world, worker);
         startHTTPServer();
     }
 
@@ -30,6 +33,7 @@ public class APIManager {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress(8000), 0);
 
+            // Updated handlers now use TableManager for recycling support
             server.createContext("/upload", new UploadHandler(server, logger, world, plugin, worker));
             server.createContext("/deleteFile", new DeleteFileHandler(server, logger, world, plugin, worker));
             server.createContext("/query", new QueryHandler(logger, world, plugin, worker));
@@ -48,13 +52,11 @@ public class APIManager {
     }
 
     public void addRoutes(HttpServer server) {
-
         try {
             Bukkit.getScheduler().runTask(plugin, () -> addFileRoutes(server));
         } catch (Exception e) {
             e.printStackTrace();
         }
-
     }
 
     int indexOffset = -1;
@@ -81,11 +83,7 @@ public class APIManager {
                 nextIndex = DataUtilities.parseNextIndexTable(currentMetadata);
 
                 server.createContext(DataUtilities.contextNameBuilder(title), new FileReader(logger, world, plugin, worker, currentIndex));
-
             }
-
         }
-
     }
-
 }

@@ -1,5 +1,8 @@
 package com.decacagle.data;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -21,7 +24,144 @@ public class TableManager {
         this.worker = worker;
     }
 
-    // INSERT VALUE methods
+    // ==================== FREE CHUNK RECYCLING SYSTEM ====================
+
+    /**
+     * Ensures the freeChunks table exists for tracking deleted chunks
+     * Uses sequential allocation to avoid infinite recursion
+     */
+    private void ensureFreeChunksTableExists() {
+        int freeChunksIndex = worker.getTableIndex("freeChunks", indexOffset);
+        if (freeChunksIndex == 0) {
+            // Create the freeChunks table using sequential allocation to avoid recursion
+            createTableWithoutRecycling("freeChunks");
+            logger.info("Created freeChunks tracking table");
+        }
+    }
+
+    /**
+     * Creates a table using only sequential allocation (no recycling)
+     * Used internally to prevent infinite recursion when creating freeChunks table
+     */
+    private MethodResponse createTableWithoutRecycling(String tableTitle) {
+        logger.info("Creating table without recycling: " + tableTitle);
+
+        int index = getNextTableIndexSequential();
+        int last = index - 1;
+
+        String newFileMetadata = DataUtilities.tableMetadataBuilder(tableTitle, last, 0);
+
+        boolean metadataWriteResult = worker.writeToChunk(newFileMetadata, 0, index + indexOffset, false, 1);
+
+        if (metadataWriteResult) {
+            updateLastTableMetadata(index);
+            placeTableSign(tableTitle, index);
+
+            return new MethodResponse(200, "Wrote table " + tableTitle + " successfully!", "Wrote table " + tableTitle + " successfully!", false);
+        } else {
+            return new MethodResponse(400, "Bad Request: Failed to write table metadata!", null, true);
+        }
+    }
+
+    /**
+     * Sequential table index allocation without recycling check
+     */
+    private int getNextTableIndexSequential() {
+        String startIndexText = worker.readChunk(0, 1, false, 1);
+
+        if (startIndexText.isEmpty() || startIndexText.equals("0")) {
+            worker.writeToChunk("1", 0, 1, false, 1);
+            return 1;
+        } else {
+            int currentIndex = Integer.parseInt(startIndexText);
+            String currentData = worker.readChunk(0, currentIndex + indexOffset, false, 1);
+            int nextIndex = DataUtilities.parseNextIndexTable(currentData);
+
+            while (nextIndex != 0) {
+                currentIndex = nextIndex;
+                currentData = worker.readChunk(0, currentIndex + indexOffset, false, 1);
+                nextIndex = DataUtilities.parseNextIndexTable(currentData);
+            }
+
+            return currentIndex + 1;
+        }
+    }
+
+    /**
+     * Adds a deleted chunk to the free chunks table for recycling
+     * @param chunkIndex The index of the deleted chunk
+     * @param chunkType Type of chunk: "table", "row", or "file"
+     * @param parentTableIndex For rows, the table they belonged to (0 for tables/files)
+     */
+    public void addToFreeChunks(int chunkIndex, String chunkType, int parentTableIndex) {
+        ensureFreeChunksTableExists();
+
+        String freeChunkData = "{\"chunkIndex\":" + chunkIndex +
+                ",\"chunkType\":\"" + chunkType + "\"" +
+                ",\"parentTableIndex\":" + parentTableIndex + "}";
+
+        MethodResponse result = insertRow("freeChunks", freeChunkData);
+        if (result.hasError()) {
+            logger.warning("Failed to add chunk " + chunkIndex + " to free chunks: " + result.getStatusMessage());
+        } else {
+            logger.info("Added chunk " + chunkIndex + " (" + chunkType + ") to free chunks list");
+        }
+    }
+
+    /**
+     * Gets and removes a free chunk of the specified type
+     * @param chunkType The type of chunk needed: "table", "row", or "file"
+     * @param parentTableIndex For rows, the table index they should belong to (0 for tables/files)
+     * @return The recycled chunk index, or 0 if no free chunks available
+     */
+    public int getFreeChunk(String chunkType, int parentTableIndex) {
+        // Check if freeChunks table exists first, if not, return 0 (no free chunks)
+        int freeChunksIndex = worker.getTableIndex("freeChunks", indexOffset);
+        if (freeChunksIndex == 0) {
+            // No freeChunks table exists yet, so no free chunks available
+            return 0;
+        }
+
+        try {
+            String searchCondition = gatherRowsWithCondition(freeChunksIndex, "chunkType", chunkType);
+            JsonArray freeChunks = JsonParser.parseString(searchCondition).getAsJsonArray();
+
+            for (int i = 0; i < freeChunks.size(); i++) {
+                JsonObject chunk = freeChunks.get(i).getAsJsonObject();
+
+                // For rows, prefer chunks from the same table, but accept any if none available
+                if (chunkType.equals("row")) {
+                    int chunkParentTable = chunk.get("parentTableIndex").getAsInt();
+                    if (chunkParentTable == parentTableIndex || chunkParentTable == 0) {
+                        int chunkIndex = chunk.get("chunkIndex").getAsInt();
+                        int chunkId = chunk.get("id").getAsInt();
+
+                        // Remove this chunk from the free list
+                        deleteRow(freeChunksIndex, chunkId);
+
+                        logger.info("Recycling chunk " + chunkIndex + " for " + chunkType);
+                        return chunkIndex;
+                    }
+                } else {
+                    // For tables and files, any free chunk of the right type works
+                    int chunkIndex = chunk.get("chunkIndex").getAsInt();
+                    int chunkId = chunk.get("id").getAsInt();
+
+                    // Remove this chunk from the free list
+                    deleteRow(freeChunksIndex, chunkId);
+
+                    logger.info("Recycling chunk " + chunkIndex + " for " + chunkType);
+                    return chunkIndex;
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Error processing free chunks: " + e.getMessage());
+        }
+
+        return 0; // No suitable free chunk found
+    }
+
+    // ==================== INSERT VALUE methods ====================
 
     public MethodResponse insertRow(String tableTitle, String rowData) {
         if (rowData.isEmpty()) {
@@ -51,43 +191,39 @@ public class TableManager {
         boolean rowWriteResult = worker.writeToChunk(newRowData, index + indexOffset, tableIndex + indexOffset, false, 1);
 
         if (rowWriteResult) {
-
             updateLastRowMetadata(index, tableIndex);
-
             return new MethodResponse(200, "Wrote row " + rowDataWithId + " successfully!", rowDataWithId, false);
-
         } else {
             return new MethodResponse(500, "Internal Server Error: Failed to write row, is the data too large?", null, true);
         }
-
     }
 
     public int getNextRowIndex(int tableIndex) {
+        // First, try to get a recycled chunk
+        int freeChunk = getFreeChunk("row", tableIndex);
+        if (freeChunk > 0) {
+            return freeChunk;
+        }
+
+        // No free chunks available, use existing sequential allocation logic
         String startIndexText = worker.readChunk(1, tableIndex + 1, false, 1);
 
         if (startIndexText.isEmpty() || startIndexText.equals("0")) {
-
             worker.writeToChunk("1", 1, tableIndex + 1, false, 1);
-
             return 1;
         } else {
-
             int currentIndex = Integer.parseInt(startIndexText);
             String currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
             int nextIndex = DataUtilities.parseNextIndexRow(currentData);
 
             while (nextIndex != 0) {
-
                 currentIndex = nextIndex;
                 currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
                 nextIndex = DataUtilities.parseNextIndexRow(currentData);
-
             }
 
             return currentIndex + 1;
-
         }
-
     }
 
     public void updateLastRowMetadata(int index, int tableIndex) {
@@ -102,12 +238,10 @@ public class TableManager {
             String newMetadata = DataUtilities.rowBuilder(last, index, rowContent);
 
             worker.writeToChunk(newMetadata, (index - 1) + indexOffset, tableIndex + indexOffset, false, 1);
-
         }
-
     }
 
-    // UPDATE methods
+    // ==================== UPDATE methods ====================
 
     public MethodResponse updateRow(String tableTitle, int rowId, String content) {
         if (content.isEmpty()) {
@@ -131,16 +265,13 @@ public class TableManager {
             String newContent = DataUtilities.rowBuilder(lastIndex, nextIndex, content);
 
             worker.deleteChunk(rowId + indexOffset, tableIndex + indexOffset, false, 1);
-
             worker.writeToChunk(newContent, rowId + indexOffset, tableIndex + indexOffset, false, 1);
 
             return new MethodResponse(200, "Successfully updated id " + rowId + " in " + tableTitle, "Successfully updated id " + rowId + " in " + tableTitle, false);
-
         }
-
     }
 
-    // SELECT * methods
+    // ==================== SELECT * methods ====================
 
     public MethodResponse readTable(String tableTitle) {
         if (tableTitle.isEmpty()) {
@@ -156,7 +287,6 @@ public class TableManager {
         String result = readAllRows(tableIndex);
 
         return new MethodResponse(200, "Successfully read all rows from " + tableTitle + "!", result, false);
-
     }
 
     public MethodResponse readTableWithCondition(String tableTitle, String key, String target) {
@@ -173,21 +303,14 @@ public class TableManager {
         String result = gatherRowsWithCondition(tableIndex, key, target);
 
         return new MethodResponse(200, "Successfully read rows where " + key + " == " + target, result, false);
-
     }
 
     public String gatherRowsWithCondition(int tableIndex, String key, String target) {
-
         StringBuilder jsonArrayBuilder = new StringBuilder("[");
 
         String tableStartIndex = worker.readChunk(1, tableIndex + indexOffset, false, 1);
 
-        if (tableStartIndex.isEmpty()) {
-            jsonArrayBuilder.append("]");
-            return jsonArrayBuilder.toString();
-        }
-
-        if (tableStartIndex.equals("0")) {
+        if (tableStartIndex.isEmpty() || tableStartIndex.equals("0")) {
             jsonArrayBuilder.append("]");
             return jsonArrayBuilder.toString();
         }
@@ -230,21 +353,14 @@ public class TableManager {
         jsonArrayBuilder.append("]");
 
         return jsonArrayBuilder.toString();
-
     }
 
     public String readAllRows(int tableIndex) {
-
         StringBuilder jsonArrayBuilder = new StringBuilder("[");
 
         String tableStartIndex = worker.readChunk(1, tableIndex + indexOffset, false, 1);
 
-        if (tableStartIndex.isEmpty()) {
-            jsonArrayBuilder.append("]");
-            return jsonArrayBuilder.toString();
-        }
-
-        if (tableStartIndex.equals("0")) {
+        if (tableStartIndex.isEmpty() || tableStartIndex.equals("0")) {
             jsonArrayBuilder.append("]");
             return jsonArrayBuilder.toString();
         }
@@ -275,10 +391,9 @@ public class TableManager {
         jsonArrayBuilder.append("]");
 
         return jsonArrayBuilder.toString();
-
     }
 
-    // SELECT {id} methods
+    // ==================== SELECT {id} methods ====================
 
     public MethodResponse readRow(String tableTitle, int rowIndex) {
         if (rowIndex <= 0) {
@@ -304,13 +419,11 @@ public class TableManager {
         String content = DataUtilities.parseRowContent(rowData);
 
         return new MethodResponse(200, "Successfully read from index " + rowIndex + " in " + tableTitle + "!", content, false);
-
     }
 
-    // CREATE TABLE methods
+    // ==================== CREATE TABLE methods ====================
 
     public MethodResponse createTable(String tableTitle) {
-
         if (tableTitle.isEmpty()) {
             return new MethodResponse(400, "Bad Request: Body of request is length 0. Your table needs a title!", null, true);
         }
@@ -330,45 +443,24 @@ public class TableManager {
         boolean metadataWriteResult = worker.writeToChunk(newFileMetadata, 0, index + indexOffset, false, 1);
 
         if (metadataWriteResult) {
-
             updateLastTableMetadata(index);
-
             placeTableSign(tableTitle, index);
 
             return new MethodResponse(200, "Wrote table " + tableTitle + " successfully!", "Wrote table " + tableTitle + " successfully!", false);
-
         } else {
             return new MethodResponse(400, "Bad Request: Failed to write table metadata!", null, true);
         }
-
     }
 
     public int getNextTableIndex() {
-        String startIndexText = worker.readChunk(0, 1, false, 1);
-
-        if (startIndexText.isEmpty() || startIndexText.equals("0")) {
-
-            worker.writeToChunk("1", 0, 1, false, 1);
-
-            return 1;
-        } else {
-
-            int currentIndex = Integer.parseInt(startIndexText);
-            String currentData = worker.readChunk(0, currentIndex + indexOffset, false, 1);
-            int nextIndex = DataUtilities.parseNextIndexTable(currentData);
-
-            while (nextIndex != 0) {
-
-                currentIndex = nextIndex;
-                currentData = worker.readChunk(0, currentIndex + indexOffset, false, 1);
-                nextIndex = DataUtilities.parseNextIndexTable(currentData);
-
-            }
-
-            return currentIndex + 1;
-
+        // First, try to get a recycled chunk
+        int freeChunk = getFreeChunk("table", 0);
+        if (freeChunk > 0) {
+            return freeChunk;
         }
 
+        // No free chunks available, use existing sequential allocation logic
+        return getNextTableIndexSequential();
     }
 
     public void placeTableSign(String fileTitle, int fileIndex) {
@@ -381,7 +473,6 @@ public class TableManager {
         sign.setLine(1, fileTitle);
 
         sign.update();
-
     }
 
     public void updateLastTableMetadata(int index) {
@@ -396,15 +487,12 @@ public class TableManager {
             String newMetadata = DataUtilities.tableMetadataBuilder(title, last, index);
 
             worker.writeToChunk(newMetadata, 0, (index - 1) + indexOffset, false, 1);
-
         }
-
     }
 
-    // DELETE TABLE methods
+    // ==================== DELETE TABLE methods ====================
 
     public MethodResponse deleteTable(String tableTitle) {
-        // TODO: move getTableIndex to TableManager
         int tableIndex = worker.getTableIndex(tableTitle, indexOffset);
 
         if (tableIndex == 0) {
@@ -412,7 +500,6 @@ public class TableManager {
         } else {
             return deleteTable(tableIndex);
         }
-
     }
 
     public MethodResponse deleteTable(int index) {
@@ -449,7 +536,6 @@ public class TableManager {
 
             worker.deleteChunk(0, lastIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, 0, lastIndex + indexOffset, false, 1);
-
         }
 
         // if target table has a nextIndex, update nextIndex's last to be target's last
@@ -464,7 +550,6 @@ public class TableManager {
 
             worker.deleteChunk(0, nextIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, 0, nextIndex + indexOffset, false, 1);
-
         }
 
         deleteTableSign(index);
@@ -476,13 +561,13 @@ public class TableManager {
         // delete target's metadata
         worker.deleteChunk(0, index + indexOffset, false, 1);
 
+        // Add the deleted table chunks to free chunks for recycling
+        addToFreeChunks(index, "table", 0);
 
         return new MethodResponse(200, "Deleted table " + targetTitle + " with success! Rows deleted: " + rowsDeleted, "Deleted table " + targetTitle + " with success! Rows deleted: " + rowsDeleted, false);
-
     }
 
     public int deleteAllRows(int tableIndex) {
-
         String tableStartIndex = worker.readChunk(1, tableIndex + indexOffset, false, 1);
 
         if (tableStartIndex.isEmpty()) {
@@ -501,11 +586,17 @@ public class TableManager {
         int nextIndex = DataUtilities.parseNextIndexRow(currentRow);
         worker.deleteChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
 
+        // Add deleted row to free chunks
+        addToFreeChunks(currentIndex, "row", tableIndex);
+
         while (nextIndex != 0) {
             currentIndex = nextIndex;
             currentRow = worker.readChunk(currentIndex + 1, tableIndex + indexOffset, false, 1);
             nextIndex = DataUtilities.parseNextIndexRow(currentRow);
             worker.deleteChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
+
+            // Add deleted row to free chunks
+            addToFreeChunks(currentIndex, "row", tableIndex);
 
             counter++;
         }
@@ -515,11 +606,9 @@ public class TableManager {
         worker.writeToChunk("0", 1, tableIndex + indexOffset, false, 1);
 
         return counter;
-
     }
 
     public int deleteAllRowsWithCondition(int tableIndex, String key, String target) {
-
         String tableStartIndex = worker.readChunk(1, tableIndex + indexOffset, false, 1);
 
         if (tableStartIndex.isEmpty()) {
@@ -560,14 +649,13 @@ public class TableManager {
         worker.writeToChunk("0", 1, tableIndex + indexOffset, false, 1);
 
         return counter;
-
     }
 
     public void deleteTableSign(int fileIndex) {
         world.getBlockAt(-1, -63, (fileIndex * 16) + (indexOffset * 16) - 1).setType(Material.AIR);
     }
 
-    // DELETE * FROM methods
+    // ==================== DELETE * FROM methods ====================
 
     public MethodResponse deleteAllFromTable(String tableTitle) {
         int tableIndex = worker.getTableIndex(tableTitle, indexOffset);
@@ -579,7 +667,6 @@ public class TableManager {
         int rowsDeleted = deleteAllRows(tableIndex);
 
         return new MethodResponse(200, "Successfully deleted all rows from " + tableTitle + "! Rows deleted: " + rowsDeleted, "Successfully deleted all rows from " + tableTitle + "! Rows deleted: " + rowsDeleted, false);
-
     }
 
     public MethodResponse deleteAllFromTableWithCondition(String tableTitle, String key, String target) {
@@ -592,10 +679,9 @@ public class TableManager {
         int rowsDeleted = deleteAllRowsWithCondition(tableIndex, key, target);
 
         return new MethodResponse(200, "Successfully deleted all rows from " + tableTitle + "! Rows deleted: " + rowsDeleted, "Successfully deleted all rows from " + tableTitle + "! Rows deleted: " + rowsDeleted, false);
-
     }
 
-    // DELETE {id} methods
+    // ==================== DELETE {id} methods ====================
 
     public MethodResponse deleteRow(String tableTitle, int rowIndex) {
         if (rowIndex <= 0) {
@@ -612,56 +698,7 @@ public class TableManager {
             return new MethodResponse(400, "Bad Request: Table doesn't exist or has corrupted metadata!", null, true);
         }
 
-        String rowData = worker.readChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
-        if (rowData.isEmpty()) {
-            return new MethodResponse(400, "Bad Request: Row doesn't exist or has corrupted metadata!", null, true);
-        }
-
-        int lastIndex = DataUtilities.parseLastIndexRow(rowData);
-        int nextIndex = DataUtilities.parseNextIndexRow(rowData);
-
-        logger.info("target row lastIndex: " + lastIndex);
-        logger.info("target row nextIndex: " + nextIndex);
-
-        // if target has no last index, update start index to be target's next index
-        if (lastIndex == 0) {
-            worker.deleteChunk(1, tableIndex + indexOffset, false, 1);
-            worker.writeToChunk("" + nextIndex, 1, tableIndex + indexOffset, false, 1);
-        } else {
-            // otherwise, update nextIndex of target's last to be target's nextIndex
-            String lastRowData = worker.readChunk(lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
-            String lastContent = DataUtilities.parseRowContent(lastRowData);
-            int lastLast = DataUtilities.parseLastIndexRow(lastRowData);
-
-            String newMeta = DataUtilities.rowBuilder(lastLast, nextIndex, lastContent);
-
-            logger.info("Updating metadata for previous row in the chain, setting nextIndex to " + nextIndex);
-
-            worker.deleteChunk(lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
-            worker.writeToChunk(newMeta, lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
-        }
-
-        // if target table has a nextIndex, update nextIndex's last to be target's last
-        if (nextIndex != 0) {
-            String nextMeta = worker.readChunk(nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
-            String nextContent = DataUtilities.parseRowContent(nextMeta);
-            int nextNext = DataUtilities.parseNextIndexRow(nextMeta);
-
-            logger.info("Updating metadata for next row in the chain, setting lastIndex to " + lastIndex);
-
-            String newMeta = DataUtilities.rowBuilder(lastIndex, nextNext, nextContent);
-
-            worker.deleteChunk(nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
-            worker.writeToChunk(newMeta, nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
-        }
-        // delete target
-        worker.deleteChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
-        return new MethodResponse(200, "Deleted row from table with success!", "Deleted row from table with success!", false);
-
+        return deleteRow(tableIndex, rowIndex);
     }
 
     public MethodResponse deleteRow(int tableIndex, int rowIndex) {
@@ -701,7 +738,6 @@ public class TableManager {
 
             worker.deleteChunk(lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
         }
 
         // if target table has a nextIndex, update nextIndex's last to be target's last
@@ -716,16 +752,17 @@ public class TableManager {
 
             worker.deleteChunk(nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
             worker.writeToChunk(newMeta, nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
-
         }
         // delete target
         worker.deleteChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
 
-        return new MethodResponse(200, "Deleted row from table with success!", "Deleted row from table with success!", false);
+        // Add the deleted row chunk to free chunks for recycling
+        addToFreeChunks(rowIndex, "row", tableIndex);
 
+        return new MethodResponse(200, "Deleted row from table with success!", "Deleted row from table with success!", false);
     }
 
-    // PROTECT methods
+    // ==================== PROTECT methods ====================
 
     public MethodResponse protectTable(String tableTitle, String protection) {
         if (tableTitle.isEmpty()) {
@@ -759,47 +796,42 @@ public class TableManager {
                 worker.writeToChunk(newMetadata, 0, tableIndex + indexOffset, false, 1);
 
                 return new MethodResponse(200, "Successfully updated table protection rules", "Successfully updated table protection rules", false);
-
             } else {
                 // table metadata is corrupt, return failure
                 return new MethodResponse(500, "Internal Server Error: Metadata for table " + tableTitle + " is corrupt. Metadata: " + tableMetadata, null, true);
             }
-
         }
-
     }
 
     public MethodResponse removeProtections(String tableTitle) {
         if (tableTitle.isEmpty()) {
             return new MethodResponse(400, "Bad Request: Table title is empty!", null, true);
         }
-            int tableIndex = worker.getTableIndex(tableTitle, indexOffset);
+        int tableIndex = worker.getTableIndex(tableTitle, indexOffset);
 
-            if (tableIndex == 0) {
-                return new MethodResponse(400, "Bad Request: Table doesn't exist or has corrupted metadata!", null, true);
-            }
+        if (tableIndex == 0) {
+            return new MethodResponse(400, "Bad Request: Table doesn't exist or has corrupted metadata!", null, true);
+        }
 
-            String tableMetadata = worker.readChunk(0, tableIndex + indexOffset, false, 1);
+        String tableMetadata = worker.readChunk(0, tableIndex + indexOffset, false, 1);
 
-            if (DataUtilities.isValidTableMetadata(tableMetadata)) {
-                // table metadata is valid, construct and overwrite current data.
+        if (DataUtilities.isValidTableMetadata(tableMetadata)) {
+            // table metadata is valid, construct and overwrite current data.
 
-                int last = DataUtilities.parseLastIndexTable(tableMetadata);
-                int next = DataUtilities.parseNextIndexTable(tableMetadata);
-                String title = DataUtilities.parseTitle(tableMetadata);
+            int last = DataUtilities.parseLastIndexTable(tableMetadata);
+            int next = DataUtilities.parseNextIndexTable(tableMetadata);
+            String title = DataUtilities.parseTitle(tableMetadata);
 
-                String newMetadata = DataUtilities.tableMetadataBuilder(title, last, next);
+            String newMetadata = DataUtilities.tableMetadataBuilder(title, last, next);
 
-                worker.deleteChunk(0, tableIndex + indexOffset, false, 1);
-                worker.writeToChunk(newMetadata, 0, tableIndex + indexOffset, false, 1);
+            worker.deleteChunk(0, tableIndex + indexOffset, false, 1);
+            worker.writeToChunk(newMetadata, 0, tableIndex + indexOffset, false, 1);
 
-                return new MethodResponse(200, "Successfully updated table protection rules", "Successfully updated table protection rules", false);
-
-            } else {
-                // table metadata is corrupt, return failure
-                return new MethodResponse(500, "Internal Server Error: Metadata for table " + tableTitle + " is corrupt. Metadata: " + tableMetadata, null, true);
-            }
-
+            return new MethodResponse(200, "Successfully updated table protection rules", "Successfully updated table protection rules", false);
+        } else {
+            // table metadata is corrupt, return failure
+            return new MethodResponse(500, "Internal Server Error: Metadata for table " + tableTitle + " is corrupt. Metadata: " + tableMetadata, null, true);
+        }
     }
 
     public MethodResponse getProtectionFlags(String tableTitle) {
@@ -825,15 +857,11 @@ public class TableManager {
                 } else {
                     return new MethodResponse(200, flags, flags, false);
                 }
-
             } else {
                 return new MethodResponse(200, "", "", false);
             }
-
         } else {
             return new MethodResponse(500, "Internal Server Error: Metadata for table " + tableTitle + " is corrupt. Metadata: " + metadata, null, true);
         }
-
     }
-
 }

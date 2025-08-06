@@ -3,6 +3,7 @@ package com.decacagle.endpoints;
 import com.decacagle.DecaDB;
 import com.decacagle.data.DataUtilities;
 import com.decacagle.data.DataWorker;
+import com.decacagle.data.TableManager;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.bukkit.Material;
@@ -15,6 +16,7 @@ import java.util.logging.Logger;
 public class UploadHandler extends APIEndpoint {
 
     private HttpServer server;
+    private TableManager tableManager;
 
     private int indexOffset = -1;
 
@@ -22,7 +24,7 @@ public class UploadHandler extends APIEndpoint {
         super(logger, world, plugin, worker);
 
         this.server = server;
-
+        this.tableManager = new TableManager(logger, world, worker);
     }
 
     public void handle(HttpExchange exchange) {
@@ -91,32 +93,43 @@ public class UploadHandler extends APIEndpoint {
 
     }
 
+    /**
+     * Gets a free file chunk from the recycling system
+     */
+    private int getFreeFileChunk() {
+        return tableManager.getFreeChunk("file", 0);
+    }
+
+    /**
+     * Gets next available file index, checking recycled chunks first
+     */
     public int getNextIndex() {
+        // First, try to get a recycled chunk
+        int freeChunk = getFreeFileChunk();
+        if (freeChunk > 0) {
+            logger.info("Reusing free file chunk: " + freeChunk);
+            return freeChunk;
+        }
+
+        // No free chunks available, use existing sequential allocation logic
         String startIndexText = worker.readChunk(0, -1, false, 1);
 
         if (startIndexText.isEmpty() || startIndexText.equals("0")) {
-
             worker.writeToChunk("1", 0, -1, false, 1);
-
             return 1;
         } else {
-
             int currentIndex = Integer.parseInt(startIndexText);
             String currentData = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
             int nextIndex = DataUtilities.parseNextIndexTable(currentData);
 
             while (nextIndex != 0) {
-
                 currentIndex = nextIndex;
                 currentData = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
                 nextIndex = DataUtilities.parseNextIndexTable(currentData);
-
             }
 
             return currentIndex + 1;
-
         }
-
     }
 
     public void placeSign(String fileTitle, String fileMime, int fileIndex) {
@@ -130,7 +143,6 @@ public class UploadHandler extends APIEndpoint {
         sign.setLine(2, fileMime);
 
         sign.update();
-
     }
 
     public void updateLastMetadata(int index) {
@@ -146,9 +158,6 @@ public class UploadHandler extends APIEndpoint {
             String newMetadata = DataUtilities.fileMetadataBuilder(title, mime, last, index);
 
             worker.writeToChunk(newMetadata, 0, -(index - 1) + indexOffset, false, 1);
-
         }
-
     }
-
 }
