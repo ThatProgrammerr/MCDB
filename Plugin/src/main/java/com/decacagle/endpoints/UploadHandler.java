@@ -49,6 +49,12 @@ public class UploadHandler extends APIEndpoint {
         String fileMime = bodyParts[1];
         String fileData = bodyParts[2];
 
+        // Check for duplicate file titles
+        if (fileExists(fileTitle)) {
+            respond(exchange, 400, "Bad Request: A file with the title '" + fileTitle + "' already exists!");
+            return;
+        }
+
         logger.info("Successfully received file upload");
         logger.info("File Title: " + fileTitle);
         logger.info("File Mime: " + fileMime);
@@ -57,6 +63,10 @@ public class UploadHandler extends APIEndpoint {
         int last = index - 1;
 
         String newFileMetadata = DataUtilities.fileMetadataBuilder(fileTitle, fileMime, last, 0);
+
+        // Ensure the chunk is completely clean before writing
+        cleanChunkCompletely(0, -index + indexOffset);
+        cleanChunkCompletely(1, -index + indexOffset);
 
         boolean metadataWriteResult = worker.writeToChunk(newFileMetadata, 0, -index + indexOffset, false, 1);
 
@@ -74,6 +84,7 @@ public class UploadHandler extends APIEndpoint {
                     server.createContext(newContext, new FileReader(logger, world, plugin, worker, index));
                 } catch (Exception e) {
                     respond(exchange, 500, "Internal Server Error: Failed to create route -- " + e.getMessage());
+                    return;
                 }
 
                 placeSign(fileTitle, fileMime, index);
@@ -81,7 +92,6 @@ public class UploadHandler extends APIEndpoint {
                 logger.info("Created new route: " + newContext);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 respond(exchange, 200, "{\"message\":\"Wrote file " + fileTitle + " successfully!\", \"link\": \"http://localhost:8000" + newContext + "\",\"fileId\":" + index + "}");
-
 
             } else {
                 respond(exchange, 500, "Internal Server Error: Failed to write base64 data!");
@@ -91,6 +101,76 @@ public class UploadHandler extends APIEndpoint {
             respond(exchange, 400, "Bad Request: Failed to write file metadata!");
         }
 
+    }
+
+    /**
+     * Checks if a file with the given title already exists
+     */
+    private boolean fileExists(String fileTitle) {
+        String startIndexText = worker.readChunk(0, -1, false, 1);
+
+        if (startIndexText.isEmpty() || startIndexText.equals("0")) {
+            return false;
+        }
+
+        int currentIndex = Integer.parseInt(startIndexText);
+        String currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+
+        if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
+            return false;
+        }
+
+        String title = DataUtilities.parseTitle(currentMetadata);
+        int nextIndex = DataUtilities.parseNextIndexTable(currentMetadata);
+
+        if (title.equals(fileTitle)) {
+            return true;
+        }
+
+        while (nextIndex != 0) {
+            currentIndex = nextIndex;
+            currentMetadata = worker.readChunk(0, -currentIndex + indexOffset, false, 1);
+
+            if (!DataUtilities.isValidFileMetadata(currentMetadata)) {
+                break;
+            }
+
+            title = DataUtilities.parseTitle(currentMetadata);
+            nextIndex = DataUtilities.parseNextIndexTable(currentMetadata);
+
+            if (title.equals(fileTitle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Completely cleans a chunk by deleting it thoroughly
+     */
+    private void cleanChunkCompletely(int x, int z) {
+        // First delete normally
+        worker.deleteChunk(x, z, false, 1);
+
+        // Then ensure any remaining blocks are cleaned
+        int startX = x * 16;
+        int startZ = -1 + (z * 16);
+
+        for (int chunkX = startX; chunkX < startX + 16; chunkX++) {
+            for (int chunkZ = startZ; chunkZ > startZ - 16; chunkZ--) {
+                for (int y = -64; y < 320; y++) {
+                    Block block = world.getBlockAt(chunkX, y, chunkZ);
+                    if (DataUtilities.isWoolBlock(block.getType())) {
+                        if (y == -64) {
+                            block.setType(Material.GRASS_BLOCK);
+                        } else {
+                            block.setType(Material.AIR);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -139,6 +219,7 @@ public class UploadHandler extends APIEndpoint {
 
         Sign sign = (Sign) block.getState();
 
+        sign.setLine(0, "FILE #" + fileIndex);
         sign.setLine(1, fileTitle);
         sign.setLine(2, fileMime);
 
@@ -149,15 +230,17 @@ public class UploadHandler extends APIEndpoint {
         if (index != 1) {
             String metadata = worker.readChunk(0, -(index - 1) + indexOffset, false, 1);
 
-            String title = DataUtilities.parseTitle(metadata);
-            String mime = DataUtilities.parseFileMime(metadata);
-            int last = DataUtilities.parseLastIndexTable(metadata);
+            if (DataUtilities.isValidFileMetadata(metadata)) {
+                String title = DataUtilities.parseTitle(metadata);
+                String mime = DataUtilities.parseFileMime(metadata);
+                int last = DataUtilities.parseLastIndexTable(metadata);
 
-            worker.deleteChunk(0, -(index - 1) + indexOffset, false, 1);
+                worker.deleteChunk(0, -(index - 1) + indexOffset, false, 1);
 
-            String newMetadata = DataUtilities.fileMetadataBuilder(title, mime, last, index);
+                String newMetadata = DataUtilities.fileMetadataBuilder(title, mime, last, index);
 
-            worker.writeToChunk(newMetadata, 0, -(index - 1) + indexOffset, false, 1);
+                worker.writeToChunk(newMetadata, 0, -(index - 1) + indexOffset, false, 1);
+            }
         }
     }
 }

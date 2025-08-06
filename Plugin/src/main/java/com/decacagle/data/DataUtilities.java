@@ -16,6 +16,11 @@ public final class DataUtilities {
 
     private static long authTokenLifespanDays = 7;
 
+    // Index boundaries for different data types
+    public static final int MAX_FILE_INDEX = 50000;
+    public static final int MAX_TABLE_INDEX = 50000;
+    public static final int MAX_ROW_INDEX = 100000;
+
     public static String asciiToHex(char c) {
         return Integer.toHexString((int) (c));
     }
@@ -157,6 +162,87 @@ public final class DataUtilities {
         return !metadata.isEmpty() && (metadata.split(",").length == 3 || metadata.split(",").length == 4);
     }
 
+    /**
+     * Validates that an index is within reasonable bounds for a file
+     */
+    public static boolean isValidFileIndex(int index) {
+        return index > 0 && index <= MAX_FILE_INDEX;
+    }
+
+    /**
+     * Validates that an index is within reasonable bounds for a table
+     */
+    public static boolean isValidTableIndex(int index) {
+        return index > 0 && index <= MAX_TABLE_INDEX;
+    }
+
+    /**
+     * Validates that an index is within reasonable bounds for a row
+     */
+    public static boolean isValidRowIndex(int index) {
+        return index > 0 && index <= MAX_ROW_INDEX;
+    }
+
+    /**
+     * Validates that a title is safe for use as a file or table name
+     */
+    public static boolean isValidTitle(String title) {
+        if (title == null || title.trim().isEmpty()) {
+            return false;
+        }
+
+        // Check length
+        if (title.length() > 100) {
+            return false;
+        }
+
+        // Check for dangerous characters
+        String dangerous = "<>:\"/\\|?*";
+        for (char c : dangerous.toCharArray()) {
+            if (title.indexOf(c) != -1) {
+                return false;
+            }
+        }
+
+        // Check for reserved names
+        String lowerTitle = title.toLowerCase();
+        if (lowerTitle.equals("con") || lowerTitle.equals("prn") || lowerTitle.equals("aux") ||
+                lowerTitle.equals("nul") || lowerTitle.startsWith("com") || lowerTitle.startsWith("lpt")) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Sanitizes a title to make it safe for use
+     */
+    public static String sanitizeTitle(String title) {
+        if (title == null) {
+            return "untitled";
+        }
+
+        // Remove dangerous characters
+        String dangerous = "<>:\"/\\|?*";
+        String sanitized = title;
+        for (char c : dangerous.toCharArray()) {
+            sanitized = sanitized.replace(c, '_');
+        }
+
+        // Trim and limit length
+        sanitized = sanitized.trim();
+        if (sanitized.length() > 100) {
+            sanitized = sanitized.substring(0, 100);
+        }
+
+        // Handle empty result
+        if (sanitized.isEmpty()) {
+            sanitized = "untitled";
+        }
+
+        return sanitized;
+    }
+
     public static String hashString(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-512");
@@ -191,15 +277,18 @@ public final class DataUtilities {
     }
 
     public static boolean meetsCondition(String content, String key, String target) {
-        JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
+        try {
+            JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
 
-        if (obj.has(key)) {
-            String keyValue = obj.get(key).getAsString();
-            return keyValue.equals(target);
+            if (obj.has(key)) {
+                String keyValue = obj.get(key).getAsString();
+                return keyValue.equals(target);
+            }
+
+            return false;
+        } catch (Exception e) {
+            return false;
         }
-
-        return false;
-
     }
 
     /**
@@ -219,7 +308,7 @@ public final class DataUtilities {
 
             }
 
-            return new MethodResponse(200, arr.getAsString(), arr.getAsString(), false);
+            return new MethodResponse(200, arr.toString(), arr.toString(), false);
         } catch (Exception e) {
             e.printStackTrace();
             return new MethodResponse(500, "Internal Server Error: " + e.getMessage(), "[]", true);
@@ -227,9 +316,13 @@ public final class DataUtilities {
     }
 
     public static boolean isExpired(String expiration) {
-        long given = Long.parseLong(expiration);
-        long now = Instant.now().toEpochMilli();
-        return given < now;
+        try {
+            long given = Long.parseLong(expiration);
+            long now = Instant.now().toEpochMilli();
+            return given < now;
+        } catch (NumberFormatException e) {
+            return true; // Treat invalid expiration as expired
+        }
     }
 
     public static String tableProtectionBuilder(String rules) {
@@ -246,18 +339,18 @@ public final class DataUtilities {
     public static MethodResponse areValidProtectionFlags(String protection) {
         if (protection.length() == 1) {
             if (protection.toLowerCase().indexOf('c') == -1 && protection.toLowerCase().indexOf('r') == -1 && protection.toLowerCase().indexOf('u') == -1 && protection.toLowerCase().indexOf('d') == -1 && protection.toLowerCase().indexOf('*') == -1) {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
         } else if (protection.length() == 2) {
             char char1 = protection.toLowerCase().charAt(0);
             char char2 = protection.toLowerCase().charAt(1);
             if (char1 != 'c' && char1 != 'r' && char1 != 'u' && char1 != 'd' && char1 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char2 != 'c' && char2 != 'r' && char2 != 'u' && char2 != 'd' && char2 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
         } else if (protection.length() == 3) {
@@ -265,15 +358,15 @@ public final class DataUtilities {
             char char2 = protection.toLowerCase().charAt(1);
             char char3 = protection.toLowerCase().charAt(2);
             if (char1 != 'c' && char1 != 'r' && char1 != 'u' && char1 != 'd' && char1 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char2 != 'c' && char2 != 'r' && char2 != 'u' && char2 != 'd' && char2 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char3 != 'c' && char3 != 'r' && char3 != 'u' && char3 != 'd' && char3 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
         } else if (protection.length() == 4) {
@@ -282,19 +375,19 @@ public final class DataUtilities {
             char char3 = protection.toLowerCase().charAt(2);
             char char4 = protection.toLowerCase().charAt(3);
             if (char1 != 'c' && char1 != 'r' && char1 != 'u' && char1 != 'd' && char1 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char2 != 'c' && char2 != 'r' && char2 != 'u' && char2 != 'd' && char2 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char3 != 'c' && char3 != 'r' && char3 != 'u' && char3 != 'd' && char3 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
             if (char4 != 'c' && char4 != 'r' && char4 != 'u' && char4 != 'd' && char4 != '*') {
-                // if given flag is not one of the three available flags
+                // if given flag is not one of the available flags
                 return new MethodResponse(400, "Bad Request: Invalid protection flags. Valid flags are: C - Create access, R - Read access, U - Update access, D - Delete access, and * - All access (Create, Read, Update, and Delete)", null, true);
             }
         } else {
@@ -307,5 +400,4 @@ public final class DataUtilities {
     public static boolean tableHasProtectionFlags(String metadata) {
         return metadata.split(",").length == 4;
     }
-
 }

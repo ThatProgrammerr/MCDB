@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 
 import java.util.logging.Logger;
 
@@ -29,9 +30,28 @@ public class DeleteFileHandler extends APIEndpoint {
 
         if (!preflightCheck(exchange)) {
 
-            int index = Integer.parseInt(exchange.getRequestURI().getQuery().substring(2));
+            String queryString = exchange.getRequestURI().getQuery();
+            if (queryString == null || queryString.length() < 3) {
+                respond(exchange, 400, "Bad Request: Missing query parameter");
+                return;
+            }
 
-            runSynchronously(() -> deleteFile(server, exchange, index));
+            try {
+                // Support both 'q=' and 'id=' parameter formats for backwards compatibility
+                int index;
+                if (queryString.startsWith("q=")) {
+                    index = Integer.parseInt(queryString.substring(2));
+                } else if (queryString.startsWith("id=")) {
+                    index = Integer.parseInt(queryString.substring(3));
+                } else {
+                    respond(exchange, 400, "Bad Request: Invalid parameter format. Use 'q=' or 'id='");
+                    return;
+                }
+
+                runSynchronously(() -> deleteFile(server, exchange, index));
+            } catch (NumberFormatException e) {
+                respond(exchange, 400, "Bad Request: Invalid parameter value");
+            }
         }
     }
 
@@ -43,6 +63,71 @@ public class DeleteFileHandler extends APIEndpoint {
     }
 
     /**
+     * Completely cleans file chunks by removing all data
+     */
+    private void cleanFileChunksCompletely(int index) {
+        // Clean metadata chunk
+        cleanChunkCompletely(0, -index + indexOffset);
+
+        // Clean data chunk(s) - files can span multiple chunks
+        cleanChunkCompletely(1, -index + indexOffset);
+
+        // Clean any additional chunks that might contain file data
+        // This is important for large files that span multiple chunks
+        for (int i = 2; i <= 5; i++) {  // Check a few extra chunks for large files
+            try {
+                String testRead = worker.readChunk(i, -index + indexOffset, false, 1);
+                if (!testRead.isEmpty() && !testRead.equals("Failed")) {
+                    cleanChunkCompletely(i, -index + indexOffset);
+                } else {
+                    break;  // No more data chunks
+                }
+            } catch (Exception e) {
+                break;  // No more data chunks
+            }
+        }
+    }
+
+    /**
+     * Completely cleans a chunk by deleting it thoroughly
+     */
+    private void cleanChunkCompletely(int x, int z) {
+        // First delete using the worker's method
+        worker.deleteChunk(x, z, false, 1);
+
+        // Then ensure any remaining blocks are cleaned manually
+        int startX = x * 16;
+        int startZ = -1 + (z * 16);
+
+        for (int chunkX = startX; chunkX < startX + 16; chunkX++) {
+            for (int chunkZ = startZ; chunkZ > startZ - 16; chunkZ--) {
+                for (int y = -64; y < 320; y++) {
+                    Block block = world.getBlockAt(chunkX, y, chunkZ);
+                    if (DataUtilities.isWoolBlock(block.getType())) {
+                        if (y == -64) {
+                            block.setType(Material.GRASS_BLOCK);
+                        } else {
+                            block.setType(Material.AIR);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Validates that a file index exists and has valid metadata
+     */
+    private boolean validateFileExists(int index) {
+        if (index <= 0) {
+            return false;
+        }
+
+        String metadata = worker.readChunk(0, -index + indexOffset, false, 1);
+        return DataUtilities.isValidFileMetadata(metadata);
+    }
+
+    /**
      * Deletes the file stored at the given index and responds to the HTTP request.
      * Modifies metadata of the leftmost and rightmost files in the tree to update their last and next index values
      * @param server The HttpServer object passed from Handler constructor, used to remove link to the file after deletion
@@ -50,76 +135,95 @@ public class DeleteFileHandler extends APIEndpoint {
      * @param index    The index of the file to be deleted
      */
     public void deleteFile(HttpServer server, HttpExchange exchange, int index) {
-        if (index <= 0) {
-            respond(exchange, 400, "Bad Request: File indexes are 1-based");
-            return;
-        }
-
-        String metadata = worker.readChunk(0, -index + indexOffset, false, 1);
-
-        if (!DataUtilities.isValidFileMetadata(metadata)) {
+        if (!validateFileExists(index)) {
             respond(exchange, 400, "Bad Request: File doesn't exist or has corrupted metadata");
             return;
         }
 
+        String metadata = worker.readChunk(0, -index + indexOffset, false, 1);
         String targetTitle = DataUtilities.parseTitle(metadata);
         int lastIndex = DataUtilities.parseLastIndexTable(metadata);
         int nextIndex = DataUtilities.parseNextIndexTable(metadata);
 
-        logger.info("target file title: " + targetTitle);
-        logger.info("target file lastIndex: " + lastIndex);
-        logger.info("target file nextIndex: " + nextIndex);
+        logger.info("Deleting file: " + targetTitle + " (index: " + index + ")");
+        logger.info("File lastIndex: " + lastIndex + ", nextIndex: " + nextIndex);
 
+        // Update the linked list structure
+        updateLinkedListForDeletion(lastIndex, nextIndex, index);
+
+        // Remove the HTTP server context for this file
+        String contextPath = DataUtilities.contextNameBuilder(targetTitle);
+        try {
+            server.removeContext(contextPath);
+            logger.info("Removed HTTP context: " + contextPath);
+        } catch (Exception e) {
+            logger.warning("Failed to remove HTTP context " + contextPath + ": " + e.getMessage());
+        }
+
+        // Completely clean all chunks used by this file
+        cleanFileChunksCompletely(index);
+
+        // Remove the physical sign
+        deleteSign(index);
+
+        // Add the deleted file chunk to free chunks for recycling
+        addFileToFreeChunks(index);
+
+        logger.info("Successfully deleted file " + targetTitle + " and added index " + index + " to free chunks");
+        respond(exchange, 200, "Deleted file with success: " + targetTitle);
+    }
+
+    /**
+     * Updates the linked list structure when deleting a file
+     */
+    private void updateLinkedListForDeletion(int lastIndex, int nextIndex, int currentIndex) {
         // if target file has no last index, update start index to be target's next index
         if (lastIndex == 0) {
-            worker.writeToChunk("" + nextIndex, 0, -1, false, 1);
+            worker.deleteChunk(0, -1, false, 1);
+            if (nextIndex != 0) {
+                worker.writeToChunk("" + nextIndex, 0, -1, false, 1);
+            } else {
+                worker.writeToChunk("0", 0, -1, false, 1);
+            }
         } else {
             // otherwise, update nextIndex of target's last to be target's nextIndex
             String lastMeta = worker.readChunk(0, -lastIndex + indexOffset, false, 1);
-            String lastTitle = DataUtilities.parseTitle(lastMeta);
-            String lastMime = DataUtilities.parseFileMime(lastMeta);
-            int lastLast = DataUtilities.parseLastIndexTable(lastMeta);
 
-            String newMeta = DataUtilities.fileMetadataBuilder(lastTitle, lastMime, lastLast, nextIndex);
+            if (DataUtilities.isValidFileMetadata(lastMeta)) {
+                String lastTitle = DataUtilities.parseTitle(lastMeta);
+                String lastMime = DataUtilities.parseFileMime(lastMeta);
+                int lastLast = DataUtilities.parseLastIndexTable(lastMeta);
 
-            logger.info("Updating metadata for previous file in the chain, setting nextIndex to " + nextIndex);
+                String newMeta = DataUtilities.fileMetadataBuilder(lastTitle, lastMime, lastLast, nextIndex);
 
-            worker.deleteChunk(0, -lastIndex + indexOffset, false, 1);
-            worker.writeToChunk(newMeta, 0, -lastIndex + indexOffset, false, 1);
+                logger.info("Updating metadata for previous file in the chain, setting nextIndex to " + nextIndex);
+
+                worker.deleteChunk(0, -lastIndex + indexOffset, false, 1);
+                worker.writeToChunk(newMeta, 0, -lastIndex + indexOffset, false, 1);
+            }
         }
 
         // if target file has a nextIndex, update nextIndex's last to be target's last
         if (nextIndex != 0) {
             String nextMeta = worker.readChunk(0, -nextIndex + indexOffset, false, 1);
-            String nextTitle = DataUtilities.parseTitle(nextMeta);
-            String nextMime = DataUtilities.parseFileMime(nextMeta);
-            int nextNext = DataUtilities.parseNextIndexTable(nextMeta);
 
-            logger.info("Updating metadata for next file in the chain, setting lastIndex to " + lastIndex);
+            if (DataUtilities.isValidFileMetadata(nextMeta)) {
+                String nextTitle = DataUtilities.parseTitle(nextMeta);
+                String nextMime = DataUtilities.parseFileMime(nextMeta);
+                int nextNext = DataUtilities.parseNextIndexTable(nextMeta);
 
-            String newMeta = DataUtilities.fileMetadataBuilder(nextTitle, nextMime, lastIndex, nextNext);
+                logger.info("Updating metadata for next file in the chain, setting lastIndex to " + lastIndex);
 
-            worker.deleteChunk(0, -nextIndex + indexOffset, false, 1);
-            worker.writeToChunk(newMeta, 0, -nextIndex + indexOffset, false, 1);
+                String newMeta = DataUtilities.fileMetadataBuilder(nextTitle, nextMime, lastIndex, nextNext);
+
+                worker.deleteChunk(0, -nextIndex + indexOffset, false, 1);
+                worker.writeToChunk(newMeta, 0, -nextIndex + indexOffset, false, 1);
+            }
         }
-
-        // delete target's metadata
-        worker.deleteChunk(0, -index + indexOffset, false, 1);
-        // delete target's data
-        worker.deleteChunk(1, -index + indexOffset, true, 1);
-
-        deleteSign(index);
-
-        // delete server context related to file
-        server.removeContext(DataUtilities.contextNameBuilder(targetTitle));
-
-        // Add the deleted file chunk to free chunks for recycling
-        addFileToFreeChunks(index);
-
-        respond(exchange, 200, "Deleted file with success: " + targetTitle);
     }
 
     public void deleteSign(int fileIndex) {
-        world.getBlockAt(-1, -63, -(fileIndex * 16) + (indexOffset * 16) - 1).setType(Material.AIR);
+        Block signBlock = world.getBlockAt(-1, -63, -(fileIndex * 16) + (indexOffset * 16) - 1);
+        signBlock.setType(Material.AIR);
     }
 }
