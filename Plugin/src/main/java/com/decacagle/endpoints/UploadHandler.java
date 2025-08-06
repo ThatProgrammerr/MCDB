@@ -90,6 +90,7 @@ public class UploadHandler extends APIEndpoint {
                 placeSign(fileTitle, fileMime, index);
 
                 logger.info("Created new route: " + newContext);
+
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 respond(exchange, 200, "{\"message\":\"Wrote file " + fileTitle + " successfully!\", \"link\": \"http://localhost:8000" + newContext + "\",\"fileId\":" + index + "}");
 
@@ -101,6 +102,16 @@ public class UploadHandler extends APIEndpoint {
             respond(exchange, 400, "Bad Request: Failed to write file metadata!");
         }
 
+    }
+
+    /**
+     * Stores file metadata in the database as a separate operation
+     * This is called AFTER the file is completely uploaded to avoid conflicts
+     */
+    private void storeFileMetadataInDatabase(String fileTitle, String fileMime, int fileSize, int fileId, String link) {
+        // This will be handled by the frontend's separate database insert call
+        // We don't do it here to avoid chunk index conflicts
+        logger.info("File " + fileTitle + " stored with ID " + fileId + ", metadata will be stored separately by frontend");
     }
 
     /**
@@ -175,6 +186,7 @@ public class UploadHandler extends APIEndpoint {
 
     /**
      * Gets a free file chunk from the recycling system
+     * Only gets chunks from the file coordinate space
      */
     private int getFreeFileChunk() {
         return tableManager.getFreeChunk("file", 0);

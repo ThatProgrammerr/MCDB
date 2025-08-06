@@ -66,8 +66,8 @@ public class APIManager {
     private void initializeSystemTables() {
         Bukkit.getScheduler().runTask(plugin, () -> {
             // Ensure core system tables exist
-            ensureTableExists("users");
-            ensureTableExists("authTokens");
+//            ensureTableExists("users");
+//            ensureTableExists("authTokens");
             // freeChunks table is created automatically by TableManager when needed
 
             logger.info("System tables initialized");

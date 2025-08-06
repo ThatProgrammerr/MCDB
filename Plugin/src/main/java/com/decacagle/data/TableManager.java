@@ -94,17 +94,110 @@ public class TableManager {
      * @param parentTableIndex For rows, the table they belonged to (0 for tables/files)
      */
     public void addToFreeChunks(int chunkIndex, String chunkType, int parentTableIndex) {
+        // Don't add freeChunks table operations to avoid recursion
+        if (parentTableIndex != 0) {
+            String parentTableMetadata = worker.readChunk(0, parentTableIndex + indexOffset, false, 1);
+            if (DataUtilities.isValidTableMetadata(parentTableMetadata)) {
+                String parentTableTitle = DataUtilities.parseTitle(parentTableMetadata);
+                if ("freeChunks".equals(parentTableTitle)) {
+                    logger.info("Skipping free chunk tracking for freeChunks table operations to avoid recursion");
+                    return;
+                }
+
+                // CRITICAL FIX: Don't recycle chunks for the files table to avoid conflicts
+                if ("files".equals(parentTableTitle)) {
+                    logger.info("Skipping free chunk tracking for files table to avoid conflicts with file storage");
+                    return;
+                }
+            }
+        }
+
         ensureFreeChunksTableExists();
 
         String freeChunkData = "{\"chunkIndex\":" + chunkIndex +
                 ",\"chunkType\":\"" + chunkType + "\"" +
-                ",\"parentTableIndex\":" + parentTableIndex + "}";
+                ",\"parentTableIndex\":" + parentTableIndex +
+                ",\"coordinateSpace\":\"" + getCoordinateSpace(chunkType, parentTableIndex) + "\"}";
 
-        MethodResponse result = insertRow("freeChunks", freeChunkData);
+        MethodResponse result = insertRowWithoutRecycling("freeChunks", freeChunkData);
         if (result.hasError()) {
             logger.warning("Failed to add chunk " + chunkIndex + " to free chunks: " + result.getStatusMessage());
         } else {
             logger.info("Added chunk " + chunkIndex + " (" + chunkType + ") to free chunks list");
+        }
+    }
+
+    /**
+     * Gets the coordinate space identifier for a chunk type
+     */
+    private String getCoordinateSpace(String chunkType, int parentTableIndex) {
+        switch (chunkType) {
+            case "file":
+                return "file_negative_z";
+            case "table":
+                return "table_positive_z";
+            case "row":
+                return "row_table_" + parentTableIndex;
+            default:
+                return "unknown";
+        }
+    }
+
+    /**
+     * Insert a row without using recycling (used for freeChunks table)
+     */
+    private MethodResponse insertRowWithoutRecycling(String tableTitle, String rowData) {
+        if (rowData.isEmpty()) {
+            return new MethodResponse(400, "Bad Request: Body of request is length 0. Your row needs content!", null, true);
+        }
+
+        if (tableTitle.isEmpty()) {
+            return new MethodResponse(400, "Bad Request: Table title parameter is length 0. Your row needs a table to go to!", null, true);
+        }
+
+        int tableIndex = worker.getTableIndex(tableTitle, indexOffset);
+
+        if (tableIndex == 0) {
+            return new MethodResponse(400, "Bad Request: No table by the title of " + tableTitle + " exists!", null, true);
+        }
+
+        int index = getNextRowIndexSequential(tableIndex);
+        int last = index - 1;
+
+        String rowDataWithId = DataUtilities.addValueToJSON(index, "id", rowData);
+        String newRowData = DataUtilities.rowBuilder(last, 0, rowDataWithId);
+
+        boolean rowWriteResult = worker.writeToChunk(newRowData, index + indexOffset, tableIndex + indexOffset, false, 1);
+
+        if (rowWriteResult) {
+            updateLastRowMetadata(index, tableIndex);
+            return new MethodResponse(200, "Wrote row " + rowDataWithId + " successfully!", rowDataWithId, false);
+        } else {
+            return new MethodResponse(500, "Internal Server Error: Failed to write row, is the data too large?", null, true);
+        }
+    }
+
+    /**
+     * Gets next row index sequentially without recycling
+     */
+    private int getNextRowIndexSequential(int tableIndex) {
+        String startIndexText = worker.readChunk(1, tableIndex + 1, false, 1);
+
+        if (startIndexText.isEmpty() || startIndexText.equals("0")) {
+            worker.writeToChunk("1", 1, tableIndex + 1, false, 1);
+            return 1;
+        } else {
+            int currentIndex = Integer.parseInt(startIndexText);
+            String currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
+            int nextIndex = DataUtilities.parseNextIndexRow(currentData);
+
+            while (nextIndex != 0) {
+                currentIndex = nextIndex;
+                currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
+                nextIndex = DataUtilities.parseNextIndexRow(currentData);
+            }
+
+            return currentIndex + 1;
         }
     }
 
@@ -118,47 +211,100 @@ public class TableManager {
         // Check if freeChunks table exists first, if not, return 0 (no free chunks)
         int freeChunksIndex = worker.getTableIndex("freeChunks", indexOffset);
         if (freeChunksIndex == 0) {
-            // No freeChunks table exists yet, so no free chunks available
             return 0;
         }
 
+        // Don't recycle chunks for the freeChunks table itself to avoid recursion
+        if (parentTableIndex != 0) {
+            String parentTableMetadata = worker.readChunk(0, parentTableIndex + indexOffset, false, 1);
+            if (DataUtilities.isValidTableMetadata(parentTableMetadata)) {
+                String parentTableTitle = DataUtilities.parseTitle(parentTableMetadata);
+                if ("freeChunks".equals(parentTableTitle)) {
+                    return 0;
+                }
+
+                // CRITICAL FIX: Don't recycle chunks for the files table to avoid conflicts
+                if ("files".equals(parentTableTitle)) {
+                    logger.info("No chunk recycling for files table to avoid conflicts");
+                    return 0;
+                }
+            }
+        }
+
         try {
-            String searchCondition = gatherRowsWithCondition(freeChunksIndex, "chunkType", chunkType);
+            String targetCoordinateSpace = getCoordinateSpace(chunkType, parentTableIndex);
+            String searchCondition = gatherRowsWithCondition(freeChunksIndex, "coordinateSpace", targetCoordinateSpace);
             JsonArray freeChunks = JsonParser.parseString(searchCondition).getAsJsonArray();
 
-            for (int i = 0; i < freeChunks.size(); i++) {
-                JsonObject chunk = freeChunks.get(i).getAsJsonObject();
+            if (freeChunks.size() > 0) {
+                JsonObject chunk = freeChunks.get(0).getAsJsonObject();
+                int chunkIndex = chunk.get("chunkIndex").getAsInt();
+                int chunkId = chunk.get("id").getAsInt();
 
-                // For rows, prefer chunks from the same table, but accept any if none available
-                if (chunkType.equals("row")) {
-                    int chunkParentTable = chunk.get("parentTableIndex").getAsInt();
-                    if (chunkParentTable == parentTableIndex || chunkParentTable == 0) {
-                        int chunkIndex = chunk.get("chunkIndex").getAsInt();
-                        int chunkId = chunk.get("id").getAsInt();
+                // Remove this chunk from the free list
+                deleteRowWithoutRecycling(freeChunksIndex, chunkId);
 
-                        // Remove this chunk from the free list
-                        deleteRow(freeChunksIndex, chunkId);
-
-                        logger.info("Recycling chunk " + chunkIndex + " for " + chunkType);
-                        return chunkIndex;
-                    }
-                } else {
-                    // For tables and files, any free chunk of the right type works
-                    int chunkIndex = chunk.get("chunkIndex").getAsInt();
-                    int chunkId = chunk.get("id").getAsInt();
-
-                    // Remove this chunk from the free list
-                    deleteRow(freeChunksIndex, chunkId);
-
-                    logger.info("Recycling chunk " + chunkIndex + " for " + chunkType);
-                    return chunkIndex;
-                }
+                logger.info("Recycling chunk " + chunkIndex + " for " + chunkType + " in coordinate space " + targetCoordinateSpace);
+                return chunkIndex;
             }
         } catch (Exception e) {
             logger.warning("Error processing free chunks: " + e.getMessage());
         }
 
         return 0; // No suitable free chunk found
+    }
+
+    /**
+     * Deletes a row without using recycling (used for freeChunks table management)
+     */
+    private MethodResponse deleteRowWithoutRecycling(int tableIndex, int rowIndex) {
+        if (rowIndex <= 0) {
+            return new MethodResponse(400, "Bad Request: Row indexes are 1-based", null, true);
+        }
+
+        if (tableIndex == 0) {
+            return new MethodResponse(400, "Bad Request: Table doesn't exist or has corrupted metadata!", null, true);
+        }
+
+        String rowData = worker.readChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
+
+        if (rowData.isEmpty()) {
+            return new MethodResponse(400, "Bad Request: Row doesn't exist or has corrupted metadata!", null, true);
+        }
+
+        int lastIndex = DataUtilities.parseLastIndexRow(rowData);
+        int nextIndex = DataUtilities.parseNextIndexRow(rowData);
+
+        // Update linked list structure
+        if (lastIndex == 0) {
+            worker.deleteChunk(1, tableIndex + indexOffset, false, 1);
+            worker.writeToChunk("" + nextIndex, 1, tableIndex + indexOffset, false, 1);
+        } else {
+            String lastRowData = worker.readChunk(lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
+            String lastContent = DataUtilities.parseRowContent(lastRowData);
+            int lastLast = DataUtilities.parseLastIndexRow(lastRowData);
+
+            String newMeta = DataUtilities.rowBuilder(lastLast, nextIndex, lastContent);
+
+            worker.deleteChunk(lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
+            worker.writeToChunk(newMeta, lastIndex + indexOffset, tableIndex + indexOffset, false, 1);
+        }
+
+        if (nextIndex != 0) {
+            String nextMeta = worker.readChunk(nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
+            String nextContent = DataUtilities.parseRowContent(nextMeta);
+            int nextNext = DataUtilities.parseNextIndexRow(nextMeta);
+
+            String newMeta = DataUtilities.rowBuilder(lastIndex, nextNext, nextContent);
+
+            worker.deleteChunk(nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
+            worker.writeToChunk(newMeta, nextIndex + indexOffset, tableIndex + indexOffset, false, 1);
+        }
+
+        // Delete target
+        worker.deleteChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
+
+        return new MethodResponse(200, "Deleted row from table with success!", "Deleted row from table with success!", false);
     }
 
     // ==================== INSERT VALUE methods ====================
@@ -182,7 +328,12 @@ public class TableManager {
             return new MethodResponse(400, "Bad Request: No table by the title of " + tableTitle + " exists!", null, true);
         }
 
-        int index = getNextRowIndex(tableIndex);
+        // Use special handling for freeChunks table to avoid recursion
+        if ("freeChunks".equals(tableTitle)) {
+            return insertRowWithoutRecycling(tableTitle, rowData);
+        }
+
+        int index = getNextRowIndex(tableIndex, tableTitle);
         int last = index - 1;
 
         String rowDataWithId = DataUtilities.addValueToJSON(index, "id", rowData);
@@ -198,32 +349,18 @@ public class TableManager {
         }
     }
 
-    public int getNextRowIndex(int tableIndex) {
-        // First, try to get a recycled chunk
-        int freeChunk = getFreeChunk("row", tableIndex);
-        if (freeChunk > 0) {
-            return freeChunk;
-        }
-
-        // No free chunks available, use existing sequential allocation logic
-        String startIndexText = worker.readChunk(1, tableIndex + 1, false, 1);
-
-        if (startIndexText.isEmpty() || startIndexText.equals("0")) {
-            worker.writeToChunk("1", 1, tableIndex + 1, false, 1);
-            return 1;
-        } else {
-            int currentIndex = Integer.parseInt(startIndexText);
-            String currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
-            int nextIndex = DataUtilities.parseNextIndexRow(currentData);
-
-            while (nextIndex != 0) {
-                currentIndex = nextIndex;
-                currentData = worker.readChunk(currentIndex + indexOffset, tableIndex + indexOffset, false, 1);
-                nextIndex = DataUtilities.parseNextIndexRow(currentData);
+    public int getNextRowIndex(int tableIndex, String tableTitle) {
+        // CRITICAL FIX: Don't recycle chunks for the files table
+        if (!"files".equals(tableTitle)) {
+            // First, try to get a recycled chunk for non-files tables
+            int freeChunk = getFreeChunk("row", tableIndex);
+            if (freeChunk > 0) {
+                return freeChunk;
             }
-
-            return currentIndex + 1;
         }
+
+        // No free chunks available or files table, use sequential allocation
+        return getNextRowIndexSequential(tableIndex);
     }
 
     public void updateLastRowMetadata(int index, int tableIndex) {
@@ -710,6 +847,16 @@ public class TableManager {
             return new MethodResponse(400, "Bad Request: Table doesn't exist or has corrupted metadata!", null, true);
         }
 
+        // Check if this is a recyclable table
+        String tableMetadata = worker.readChunk(0, tableIndex + indexOffset, false, 1);
+        boolean isRecyclable = true;
+        if (DataUtilities.isValidTableMetadata(tableMetadata)) {
+            String tableTitle = DataUtilities.parseTitle(tableMetadata);
+            if ("freeChunks".equals(tableTitle) || "files".equals(tableTitle)) {
+                isRecyclable = false;
+            }
+        }
+
         String rowData = worker.readChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
 
         if (rowData.isEmpty()) {
@@ -756,8 +903,10 @@ public class TableManager {
         // delete target
         worker.deleteChunk(rowIndex + indexOffset, tableIndex + indexOffset, false, 1);
 
-        // Add the deleted row chunk to free chunks for recycling
-        addToFreeChunks(rowIndex, "row", tableIndex);
+        // Add the deleted row chunk to free chunks for recycling (if recyclable)
+        if (isRecyclable) {
+            addToFreeChunks(rowIndex, "row", tableIndex);
+        }
 
         return new MethodResponse(200, "Deleted row from table with success!", "Deleted row from table with success!", false);
     }
