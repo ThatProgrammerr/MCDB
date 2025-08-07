@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCSocial File Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(0, 0, 0, 0.9);
+            padding: 1rem 2rem;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #4CAF50;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .main-container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .upload-section {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+        }
+
+        .upload-zone {
+            border: 2px dashed #4CAF50;
+            border-radius: 12px;
+            padding: 3rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .upload-zone:hover {
+            border-color: #45a049;
+            background: rgba(76, 175, 80, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .upload-zone.dragover {
+            border-color: #45a049;
+            background: rgba(76, 175, 80, 0.3);
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            color: #4CAF50;
+            margin-bottom: 1rem;
+        }
+
+        .files-section {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+        }
+
+        .files-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #eee;
+        }
+
+        .search-box {
+            padding: 0.75rem 1rem;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+            width: 300px;
+            transition: border-color 0.3s ease;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+        }
+
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .file-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            border: 1px solid #eee;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .file-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        }
+
+        .file-preview {
+            width: 100%;
+            height: 150px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+            overflow: hidden;
+            border: 2px solid #e9ecef;
+        }
+
+        .file-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+
+        .file-icon {
+            font-size: 3rem;
+            color: #6c757d;
+        }
+
+        .file-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .file-info h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: #212529;
+            word-break: break-word;
+            line-height: 1.3;
+            min-height: 2.6em;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .file-details {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-bottom: 1.25rem;
+            flex: 1;
+        }
+
+        .file-details div {
+            margin-bottom: 0.25rem;
+            padding: 0.125rem 0;
+        }
+
+        .file-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: auto;
+        }
+
+        .btn {
+            padding: 0.5rem 0.875rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+            min-width: 70px;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #607d8b, #455a64);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(96, 125, 139, 0.4);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        .message {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .message.success {
+            background: rgba(76, 175, 80, 0.1);
+            color: #2e7d32;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+
+        .message.error {
+            background: rgba(244, 67, 54, 0.1);
+            color: #c62828;
+            border: 1px solid rgba(244, 67, 54, 0.3);
+        }
+
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+            min-width: 150px;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #eee;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.3s ease;
+        }
+
+        .close:hover {
+            color: #333;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 0 1rem;
+            }
+            
+            .file-grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            
+            .search-box {
+                width: 100%;
+            }
+            
+            .files-header {
+                flex-direction: column;
+                gap: 1rem;
+                align-items: stretch;
+            }
+            
+            .stats {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .file-actions {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                margin-bottom: 0.25rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header {
+                padding: 1rem;
+                flex-direction: column;
+                gap: 0.5rem;
+                text-align: center;
+            }
+
+            .logo {
+                font-size: 1.5rem;
+            }
+
+            .upload-section, .files-section {
+                padding: 1.5rem;
+            }
+
+            .file-card {
+                padding: 1rem;
+            }
+
+            .file-preview {
+                height: 120px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">📁 MCSocial File Manager</div>
+        <div>
+            <span id="connectionStatus">🟢 Connected</span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <!-- Stats Section -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number" id="totalFiles">0</div>
+                <div class="stat-label">Total Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="totalSize">0 MB</div>
+                <div class="stat-label">Total Size</div>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="upload-section">
+            <h2 style="margin-bottom: 1.5rem; color: #333;">Upload Files</h2>
+            <div id="messageContainer"></div>
+            
+            <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon">📁</div>
+                <h3>Drag & Drop Files Here</h3>
+                <p style="margin-top: 0.5rem; color: #666;">or click to select files</p>
+                <p style="margin-top: 0.5rem; font-size: 0.9rem; color: #999;">Maximum file size: 10 MB</p>
+            </div>
+            
+            <input type="file" id="fileInput" multiple>
+            <div id="uploadProgress" class="hidden" style="margin-top: 1rem;">
+                <p id="uploadStatus">Uploading...</p>
+            </div>
+        </div>
+
+        <!-- Files Section -->
+        <div class="files-section">
+            <div class="files-header">
+                <h2 style="color: #333;">My Files</h2>
+                <input type="text" id="searchInput" class="search-box" placeholder="Search files...">
+            </div>
+            
+            <div id="loadingIndicator" class="loading">
+                <p>Loading files...</p>
+            </div>
+            
+            <div id="fileGrid" class="file-grid hidden"></div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Confirm Delete</h3>
+                <span class="close" onclick="closeModal('deleteModal')">&times;</span>
+            </div>
+            <p>Are you sure you want to delete this file? This action cannot be undone.</p>
+            <div style="margin-top: 2rem; display: flex; gap: 1rem; justify-content: flex-end;">
+                <button class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
+                <button class="btn btn-danger" id="confirmDelete">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class FileManager {
+            constructor() {
+                this.files = [];
+                this.filteredFiles = [];
+                this.baseUrl = 'http://localhost:8000';
+                
+                this.init();
+            }
+
+            async init() {
+                this.setupEventListeners();
+                await this.createFilesTable();
+                await this.loadFiles();
+                this.updateStats();
+            }
+
+            setupEventListeners() {
+                // File input change
+                document.getElementById('fileInput').addEventListener('change', (e) => {
+                    this.handleFileUpload(e.target.files);
+                });
+
+                // Drag and drop
+                const uploadZone = document.querySelector('.upload-zone');
+                
+                uploadZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    uploadZone.classList.add('dragover');
+                });
+
+                uploadZone.addEventListener('dragleave', () => {
+                    uploadZone.classList.remove('dragover');
+                });
+
+                uploadZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    uploadZone.classList.remove('dragover');
+                    this.handleFileUpload(e.dataTransfer.files);
+                });
+
+                // Search functionality
+                document.getElementById('searchInput').addEventListener('input', (e) => {
+                    this.filterFiles(e.target.value);
+                });
+            }
+
+            async createFilesTable() {
+                try {
+                    const response = await fetch(`${this.baseUrl}/query`, {
+                        method: 'POST',
+                        body: 'create table files'
+                    });
+                    
+                    if (!response.ok && !response.statusText.includes('already exists')) {
+                        console.log('Files table creation result:', await response.text());
+                    }
+                } catch (error) {
+                    console.error('Error creating files table:', error);
+                }
+            }
+
+            async loadFiles() {
+                try {
+                    const response = await fetch(`${this.baseUrl}/query`, {
+                        method: 'POST',
+                        body: 'select * from files'
+                    });
+
+                    if (response.ok) {
+                        this.files = await response.json();
+                        this.filteredFiles = [...this.files];
+                        this.renderFiles();
+                    } else {
+                        console.log('No files found or table does not exist');
+                        this.files = [];
+                        this.filteredFiles = [];
+                        this.renderFiles();
+                    }
+                } catch (error) {
+                    console.error('Error loading files:', error);
+                    this.showMessage('Error loading files', 'error');
+                } finally {
+                    document.getElementById('loadingIndicator').classList.add('hidden');
+                    document.getElementById('fileGrid').classList.remove('hidden');
+                }
+            }
+
+            async handleFileUpload(files) {
+                const fileArray = Array.from(files);
+                document.getElementById('uploadProgress').classList.remove('hidden');
+                
+                for (let i = 0; i < fileArray.length; i++) {
+                    const file = fileArray[i];
+                    
+                    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+                        this.showMessage(`File ${file.name} is too large (max 10MB)`, 'error');
+                        continue;
+                    }
+
+                    document.getElementById('uploadStatus').textContent = 
+                        `Uploading ${file.name} (${i + 1}/${fileArray.length})...`;
+
+                    try {
+                        const uploadResult = await this.uploadFile(file);
+                        if (uploadResult.success) {
+                            // Store file metadata in database with corrected MIME type
+                            const correctedMimeType = file.type || this.getMimeTypeFromExtension(file.name);
+                            await this.storeFileMetadata(file, uploadResult.data, correctedMimeType);
+                            this.showMessage(`Successfully uploaded ${file.name}`, 'success');
+                        } else {
+                            this.showMessage(`Failed to upload ${file.name}: ${uploadResult.error}`, 'error');
+                        }
+                    } catch (error) {
+                        console.error('Upload error:', error);
+                        this.showMessage(`Error uploading ${file.name}: ${error.message}`, 'error');
+                    }
+                }
+
+                document.getElementById('uploadProgress').classList.add('hidden');
+                document.getElementById('fileInput').value = '';
+                await this.loadFiles();
+                this.updateStats();
+            }
+
+            async uploadFile(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    
+                    reader.onload = async (e) => {
+                        try {
+                            const base64Data = e.target.result.split(',')[1];
+                            // Ensure MIME type is not empty to prevent parsing errors
+                            const mimeType = file.type || this.getMimeTypeFromExtension(file.name);
+                            const body = `${file.name};${mimeType};${base64Data}`;
+                            
+                            const response = await fetch(`${this.baseUrl}/upload`, {
+                                method: 'POST',
+                                body: body
+                            });
+
+                            if (response.ok) {
+                                const result = await response.json();
+                                resolve({ success: true, data: result });
+                            } else {
+                                const errorText = await response.text();
+                                resolve({ success: false, error: errorText });
+                            }
+                        } catch (error) {
+                            reject(error);
+                        }
+                    };
+
+                    reader.onerror = () => reject(new Error('Failed to read file'));
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            getMimeTypeFromExtension(filename) {
+                const ext = filename.split('.').pop().toLowerCase();
+                const mimeTypes = {
+                    'txt': 'text/plain',
+                    'log': 'text/plain',
+                    'md': 'text/plain',
+                    'readme': 'text/plain',
+                    'cfg': 'text/plain',
+                    'conf': 'text/plain',
+                    'ini': 'text/plain',
+                    'yml': 'text/plain',
+                    'yaml': 'text/plain',
+                    'csv': 'text/csv',
+                    'tsv': 'text/tab-separated-values',
+                    'pdf': 'application/pdf',
+                    'doc': 'application/msword',
+                    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'xls': 'application/vnd.ms-excel',
+                    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'ppt': 'application/vnd.ms-powerpoint',
+                    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                    'jpg': 'image/jpeg',
+                    'jpeg': 'image/jpeg',
+                    'png': 'image/png',
+                    'gif': 'image/gif',
+                    'bmp': 'image/bmp',
+                    'webp': 'image/webp',
+                    'svg': 'image/svg+xml',
+                    'ico': 'image/x-icon',
+                    'tiff': 'image/tiff',
+                    'mp4': 'video/mp4',
+                    'avi': 'video/avi',
+                    'mov': 'video/quicktime',
+                    'wmv': 'video/x-ms-wmv',
+                    'flv': 'video/x-flv',
+                    'webm': 'video/webm',
+                    'mkv': 'video/x-matroska',
+                    'mp3': 'audio/mpeg',
+                    'wav': 'audio/wav',
+                    'ogg': 'audio/ogg',
+                    'flac': 'audio/flac',
+                    'aac': 'audio/aac',
+                    'zip': 'application/zip',
+                    'rar': 'application/x-rar-compressed',
+                    '7z': 'application/x-7z-compressed',
+                    'tar': 'application/x-tar',
+                    'gz': 'application/gzip',
+                    'json': 'application/json',
+                    'xml': 'application/xml',
+                    'html': 'text/html',
+                    'htm': 'text/html',
+                    'css': 'text/css',
+                    'js': 'application/javascript',
+                    'ts': 'text/plain',
+                    'py': 'text/plain',
+                    'java': 'text/plain',
+                    'cpp': 'text/plain',
+                    'c': 'text/plain',
+                    'h': 'text/plain',
+                    'php': 'text/plain',
+                    'rb': 'text/plain',
+                    'go': 'text/plain',
+                    'rs': 'text/plain',
+                    'sql': 'text/plain',
+                    'sh': 'text/plain',
+                    'bat': 'text/plain',
+                    'exe': 'application/x-msdownload',
+                    'msi': 'application/x-msdownload',
+                    'dmg': 'application/x-apple-diskimage',
+                    'deb': 'application/x-debian-package',
+                    'rpm': 'application/x-rpm',
+                    'jar': 'application/java-archive'
+                };
+                
+                // Return the specific mime type if found, otherwise treat as text file
+                return mimeTypes[ext] || 'text/plain';
+            }
+
+            async storeFileMetadata(file, uploadResult, correctedMimeType) {
+                const fileMetadata = {
+                    name: file.name,
+                    size: file.size,
+                    type: correctedMimeType, // Use the corrected MIME type instead of file.type
+                    uploadDate: new Date().toLocaleString(),
+                    fileId: uploadResult.fileId,
+                    link: uploadResult.link
+                };
+
+                const response = await fetch(`${this.baseUrl}/query`, {
+                    method: 'POST',
+                    body: `insert into files value ${JSON.stringify(fileMetadata)}`
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to store file metadata');
+                }
+            }
+
+            async deleteFile(fileId, dbId) {
+                try {
+                    // Delete from file system
+                    const deleteResponse = await fetch(`${this.baseUrl}/deleteFile?q=${fileId}`);
+                    
+                    if (deleteResponse.ok) {
+                        // Delete from database
+                        await fetch(`${this.baseUrl}/query`, {
+                            method: 'POST',
+                            body: `delete ${dbId} from files`
+                        });
+                        
+                        this.showMessage('File deleted successfully', 'success');
+                        await this.loadFiles();
+                        this.updateStats();
+                    } else {
+                        const errorText = await deleteResponse.text();
+                        this.showMessage(`Failed to delete file: ${errorText}`, 'error');
+                    }
+                } catch (error) {
+                    console.error('Delete error:', error);
+                    this.showMessage(`Error deleting file: ${error.message}`, 'error');
+                }
+            }
+
+            filterFiles(searchTerm) {
+                this.filteredFiles = this.files.filter(file => 
+                    file.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    this.getDisplayType(file).toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    (file.type && file.type.toLowerCase().includes(searchTerm.toLowerCase()))
+                );
+                this.renderFiles();
+            }
+
+            renderFiles() {
+                const fileGrid = document.getElementById('fileGrid');
+                
+                if (this.filteredFiles.length === 0) {
+                    fileGrid.innerHTML = `
+                        <div style="grid-column: 1 / -1; text-align: center; padding: 3rem; color: #6c757d;">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📁</div>
+                            <h3 style="color: #495057; margin-bottom: 0.5rem;">No files found</h3>
+                            <p>Upload some files to get started!</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                fileGrid.innerHTML = this.filteredFiles.map(file => `
+                    <div class="file-card">
+                        <div class="file-preview">
+                            ${this.getFilePreview(file)}
+                        </div>
+                        <div class="file-info">
+                            <h3 title="${this.escapeHtml(file.name)}">${this.escapeHtml(file.name)}</h3>
+                            <div class="file-details">
+                                <div><strong>Size:</strong> ${this.formatFileSize(file.size)}</div>
+                                <div><strong>Type:</strong> ${this.getDisplayType(file)}</div>
+                                <div><strong>Uploaded:</strong> ${this.escapeHtml(file.uploadDate)}</div>
+                            </div>
+                            <div class="file-actions">
+                                <a href="${this.escapeHtml(file.link)}" target="_blank" class="btn btn-primary">Download</a>
+                                <button class="btn btn-secondary" onclick="fileManager.copyToClipboard('${file.link.replace(/'/g, "\\'")}')">Copy Link</button>
+                                <button class="btn btn-danger" onclick="fileManager.confirmDelete(${file.fileId}, ${file.id})">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            getFilePreview(file) {
+                if (file.type && file.type.startsWith('image/')) {
+                    return `<img src="${this.escapeHtml(file.link)}" alt="${this.escapeHtml(file.name)}" onerror="this.style.display='none'; this.nextSibling.style.display='flex'"><div class="file-icon" style="display:none">🖼️</div>`;
+                } else if (file.type && file.type.startsWith('video/')) {
+                    return `<div class="file-icon">🎥</div>`;
+                } else if (file.type && file.type.startsWith('audio/')) {
+                    return `<div class="file-icon">🎵</div>`;
+                } else if (file.type && file.type.includes('pdf')) {
+                    return `<div class="file-icon">📄</div>`;
+                } else if (file.type && (file.type.includes('zip') || file.type.includes('rar'))) {
+                    return `<div class="file-icon">📦</div>`;
+                } else if (file.type && file.type.startsWith('text/')) {
+                    return `<div class="file-icon">📝</div>`;
+                } else if (file.type && (file.type.includes('json') || file.type.includes('xml'))) {
+                    return `<div class="file-icon">⚙️</div>`;
+                } else if (file.type && file.type.includes('javascript')) {
+                    return `<div class="file-icon">📜</div>`;
+                } else {
+                    return `<div class="file-icon">📄</div>`;
+                }
+            }
+
+            getDisplayType(file) {
+                if (!file.type || file.type === 'application/octet-stream') {
+                    return 'Unknown';
+                }
+                
+                // Convert MIME types to user-friendly names
+                const typeMap = {
+                    'text/plain': 'Text File',
+                    'text/csv': 'CSV File',
+                    'text/html': 'HTML File',
+                    'text/css': 'CSS File',
+                    'application/json': 'JSON File',
+                    'application/xml': 'XML File',
+                    'application/javascript': 'JavaScript File',
+                    'application/pdf': 'PDF Document',
+                    'application/zip': 'ZIP Archive',
+                    'application/x-rar-compressed': 'RAR Archive',
+                    'application/x-7z-compressed': '7Z Archive',
+                    'image/jpeg': 'JPEG Image',
+                    'image/png': 'PNG Image',
+                    'image/gif': 'GIF Image',
+                    'image/bmp': 'BMP Image',
+                    'image/webp': 'WebP Image',
+                    'image/svg+xml': 'SVG Image',
+                    'video/mp4': 'MP4 Video',
+                    'video/avi': 'AVI Video',
+                    'video/quicktime': 'MOV Video',
+                    'video/webm': 'WebM Video',
+                    'audio/mpeg': 'MP3 Audio',
+                    'audio/wav': 'WAV Audio',
+                    'audio/ogg': 'OGG Audio',
+                    'audio/flac': 'FLAC Audio'
+                };
+
+                return typeMap[file.type] || file.type;
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            copyToClipboard(text) {
+                navigator.clipboard.writeText(text).then(() => {
+                    this.showMessage('Link copied to clipboard!', 'success');
+                });
+            }
+
+            confirmDelete(fileId, dbId) {
+                const modal = document.getElementById('deleteModal');
+                modal.style.display = 'block';
+                
+                document.getElementById('confirmDelete').onclick = () => {
+                    this.deleteFile(fileId, dbId);
+                    this.closeModal('deleteModal');
+                };
+            }
+
+            closeModal(modalId) {
+                document.getElementById(modalId).style.display = 'none';
+            }
+
+            showMessage(message, type) {
+                const container = document.getElementById('messageContainer');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}`;
+                messageDiv.textContent = message;
+                
+                container.appendChild(messageDiv);
+                
+                setTimeout(() => {
+                    messageDiv.remove();
+                }, 5000);
+            }
+
+            updateStats() {
+                const totalFiles = this.files.length;
+                const totalSize = this.files.reduce((sum, file) => sum + (file.size || 0), 0);
+                
+                document.getElementById('totalFiles').textContent = totalFiles;
+                document.getElementById('totalSize').textContent = this.formatFileSize(totalSize);
+            }
+        }
+
+        // Global functions for onclick handlers
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        // Initialize file manager
+        const fileManager = new FileManager();
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(modal => {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
