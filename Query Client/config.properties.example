@@ -1,0 +1,16 @@
+# MCDB Client Configuration Example
+#
+# To use this configuration:
+# 1. Copy this file to 'config.properties'
+# 2. Edit the base.url below to match your server
+# 3. Restart the MCDB client
+#
+# If no config.properties file exists, the client will use http://localhost:8000
+
+# Base URL for the MCDB server (without trailing slash)
+base.url=http://localhost:8000
+
+# Examples of other possible configurations:
+# base.url=https://your-production-server.com
+# base.url=http://192.168.1.100:8000
+# base.url=https://api.example.com:8000

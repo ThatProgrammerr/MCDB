@@ -1,4 +1,5 @@
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -10,33 +11,30 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Properties;
 import java.util.Scanner;
 
 public class Main {
     private String baseUrl;
     private HttpClient client;
+    private static final String CONFIG_FILE = "config.properties";
 
     public Main() {
         this.client = HttpClient.newHttpClient();
+        this.baseUrl = loadBaseUrlFromConfig();
 
-        Scanner s = new Scanner(System.in);
-
-        // Get base URL from user
-        System.out.print("Enter base URL (e.g., http://localhost:8000): ");
-        this.baseUrl = s.nextLine().trim();
-
-        // Remove trailing slash if present
-        if (baseUrl.endsWith("/")) {
-            baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-        }
+        System.out.println("Using base URL: " + this.baseUrl);
+        System.out.println();
 
         System.out.println("MCDB Query/Upload Client. Available commands:");
         System.out.println("  query <your query>         - Send a query to /query endpoint");
         System.out.println("  upload <file_path>         - Upload a file to /upload endpoint");
         System.out.println("  upload_dir <dir_path>      - Upload all files in a directory (with delay)");
+        System.out.println("  config                     - Show current configuration");
         System.out.println("  quit                       - Exit the application");
         System.out.println();
 
+        Scanner s = new Scanner(System.in);
         while (s.hasNextLine()) {
             String input = s.nextLine().trim();
 
@@ -49,6 +47,51 @@ public class Main {
 
         s.close();
         System.out.println("Goodbye!");
+    }
+
+    private String loadBaseUrlFromConfig() {
+        Properties props = new Properties();
+        Path configPath = Paths.get(CONFIG_FILE);
+
+        // Try to load from file first
+        if (Files.exists(configPath)) {
+            try (InputStream input = Files.newInputStream(configPath)) {
+                props.load(input);
+                String url = props.getProperty("base.url");
+                if (url != null && !url.trim().isEmpty()) {
+                    url = url.trim();
+                    // Remove trailing slash if present
+                    if (url.endsWith("/")) {
+                        url = url.substring(0, url.length() - 1);
+                    }
+                    System.out.println("Loaded base URL from " + CONFIG_FILE);
+                    return url;
+                }
+            } catch (IOException e) {
+                System.err.println("Warning: Could not read config file " + CONFIG_FILE + ": " + e.getMessage());
+            }
+        }
+
+        // Config file doesn't exist - prompt user
+        return promptForConfig();
+    }
+
+    private String promptForConfig() {
+        Scanner s = new Scanner(System.in);
+
+        System.out.println("No config file found.");
+        System.out.println("To configure a custom base URL:");
+        System.out.println("  1. Copy 'config.properties.example' to 'config.properties'");
+        System.out.println("  2. Edit 'config.properties' with your desired base URL");
+        System.out.println("  3. Restart the application");
+        System.out.println();
+        System.out.print("Press Enter to continue with default (http://localhost:8000) or Ctrl+C to exit: ");
+
+        s.nextLine(); // Wait for user to press Enter
+
+        String defaultUrl = "http://localhost:8000";
+        System.out.println("Using default base URL: " + defaultUrl);
+        return defaultUrl;
     }
 
     public void processCommand(String input) {
@@ -84,9 +127,33 @@ public class Main {
                 sendDirectoryUpload(parts[1]);
                 break;
 
+            case "config":
+                showConfig();
+                break;
+
             default:
                 System.out.println("Unknown command: " + command);
-                System.out.println("Available commands: query, upload, upload_dir, quit");
+                System.out.println("Available commands: query, upload, upload_dir, config, quit");
+        }
+    }
+
+    private void showConfig() {
+        System.out.println("Current configuration:");
+        System.out.println("  Base URL: " + baseUrl);
+        System.out.println("  Config file: " + CONFIG_FILE);
+
+        Path configPath = Paths.get(CONFIG_FILE);
+        if (Files.exists(configPath)) {
+            System.out.println("  Status: Config file exists");
+            System.out.println();
+            System.out.println("To change the base URL, edit " + CONFIG_FILE + " and restart.");
+        } else {
+            System.out.println("  Status: Using default (no config file)");
+            System.out.println();
+            System.out.println("To set a custom base URL:");
+            System.out.println("  1. Copy 'config.properties.example' to 'config.properties'");
+            System.out.println("  2. Edit 'config.properties' with your desired base URL");
+            System.out.println("  3. Restart the application");
         }
     }
 
